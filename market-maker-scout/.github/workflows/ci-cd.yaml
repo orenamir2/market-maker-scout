@@ -1,0 +1,56 @@
+name: ci-cd
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+  packages: write
+jobs:
+  test-build-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: pip install -r requirements.txt && pytest -q
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        if: github.event_name == 'push'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.event_name == 'push' }}
+          tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
+      - name: Install Helm
+        if: github.event_name == 'push'
+        uses: azure/setup-helm@v4
+      - name: Install kubectl
+        if: github.event_name == 'push'
+        uses: azure/setup-kubectl@v4
+      - name: Install Codex CLI
+        if: github.event_name == 'push'
+        run: npm install -g @openai/codex
+      - name: Configure cluster
+        if: github.event_name == 'push'
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > ~/.kube/config
+      - name: Deploy and advise on failure
+        if: github.event_name == 'push'
+        env:
+          IMAGE_REPOSITORY: ghcr.io/${{ github.repository }}
+          IMAGE_TAG: ${{ github.sha }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: ./scripts/deploy.sh
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: deployment-advice
+          path: deployment-advice.txt
+          if-no-files-found: ignore
