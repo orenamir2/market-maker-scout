@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -uo pipefail
+set -xv
 RELEASE=${RELEASE:-market-maker-scout}
 NAMESPACE=${NAMESPACE:-market-maker-scout}
 IMAGE_REPOSITORY=${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required}
