@@ -22,7 +22,20 @@
   <div id="status"></div>
   <table>
     <thead>
-      <tr><th>Ticker</th><th>Score</th><th>Confidence</th><th>Volume Z</th><th>20d move</th><th>Explanation</th></tr>
+      <tr>
+        <th>Ticker</th>
+        <th>Score</th>
+        <th>Confidence</th>
+        <th>Volume Z</th>
+        <th>Vol Accel</th>
+        <th>20d Move</th>
+        <th>Momentum Z</th>
+        <th>Return T</th>
+        <th>Up/Down Vol</th>
+        <th>Vol Compression</th>
+        <th>Max Drawdown</th>
+        <th>Explanation</th>
+      </tr>
     </thead>
     <tbody id="rows"></tbody>
   </table>
@@ -38,7 +51,7 @@
       const d = await r.json();
       document.getElementById('status').textContent = d.warning || d.detail || '';
       document.getElementById('rows').innerHTML = (d.results || []).map(x =>
-        `<tr><td>${x.ticker}</td><td>${x.score}</td><td>${x.confidence}%</td><td>${x.volume_z}</td><td>${x.relative_strength}%</td><td>${x.explanation}</td></tr>`
+        `<tr><td>${x.ticker}</td><td>${x.score}</td><td>${x.confidence}%</td><td>${x.volume_z}</td><td>${x.volume_acceleration}</td><td>${x.relative_strength}%</td><td>${x.momentum_z}</td><td>${x.return_t_stat}</td><td>${x.up_down_volume_ratio}</td><td>${x.volatility_compression}</td><td>${x.drawdown_resilience}%</td><td>${x.explanation}</td></tr>`
       ).join('');
     }
   </script>

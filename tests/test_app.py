@@ -5,6 +5,25 @@ def test_score_range():
     assert 0 <= result.score <= 100
     assert 0 <= result.confidence <= 100
 
+def test_score_uses_multiple_statistical_components():
+    result = score_ticker("AAPL")
+    expected_components = {
+        "volume_anomaly",
+        "volume_acceleration",
+        "price_volume_confirmation",
+        "accumulation_slope",
+        "relative_strength",
+        "momentum_improvement",
+        "return_consistency",
+        "up_down_volume",
+        "volatility_compression",
+        "drawdown_resilience",
+    }
+    assert set(result.score_components) == expected_components
+    assert all(-1 <= value <= 1 for value in result.score_components.values())
+    assert result.volume_acceleration is not None
+    assert result.return_t_stat is not None
+
 def test_ticker_normalization():
     req = ScanRequest(tickers=[" aapl ", "MSFT", "AAPL"])
     assert req.tickers == ["AAPL", "MSFT"]
