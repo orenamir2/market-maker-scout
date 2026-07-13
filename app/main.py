@@ -20,6 +20,7 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
 YAHOO_PROFILE_URL = "https://query2.finance.yahoo.com/v10/finance/quoteSummary/{ticker}"
+YAHOO_SEARCH_URL = "https://query2.finance.yahoo.com/v1/finance/search"
 
 
 class ScanRequest(BaseModel):
@@ -99,11 +100,38 @@ def demo_market_series(ticker: str) -> MarketSeries:
 @lru_cache(maxsize=512)
 def fetch_industry(ticker: str) -> str:
     """Best-effort company industry lookup for scan context."""
+    headers = {"User-Agent": "market-maker-scout/0.1"}
+    try:
+        response = httpx.get(
+            YAHOO_SEARCH_URL,
+            params={"q": ticker, "quotesCount": 6, "newsCount": 0},
+            headers=headers,
+            timeout=5.0,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        quotes = payload.get("quotes") or []
+        exact_quote = next(
+            (
+                quote
+                for quote in quotes
+                if str(quote.get("symbol") or "").upper() == ticker.upper()
+            ),
+            {},
+        )
+        industry = str(
+            exact_quote.get("industryDisp") or exact_quote.get("industry") or ""
+        ).strip()
+        if industry:
+            return industry
+    except (httpx.HTTPError, ValueError, KeyError, TypeError):
+        pass
+
     try:
         response = httpx.get(
             YAHOO_PROFILE_URL.format(ticker=ticker),
             params={"modules": "assetProfile"},
-            headers={"User-Agent": "market-maker-scout/0.1"},
+            headers=headers,
             timeout=5.0,
         )
         response.raise_for_status()

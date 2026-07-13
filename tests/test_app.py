@@ -1,6 +1,7 @@
 import numpy as np
+import httpx
 
-from app.main import MarketSeries, ScanRequest, score_ticker, suggested_signal
+from app.main import MarketSeries, ScanRequest, fetch_industry, score_ticker, suggested_signal
 
 def test_score_range():
     result = score_ticker("AAPL")
@@ -54,6 +55,46 @@ def test_suggested_signal_bands():
 def test_ticker_normalization():
     req = ScanRequest(tickers=[" aapl ", "MSFT", "AAPL"])
     assert req.tickers == ["AAPL", "MSFT"]
+
+def test_fetch_industry_uses_search_exact_symbol_match(monkeypatch):
+    fetch_industry.cache_clear()
+
+    def fake_get(url, **kwargs):
+        assert kwargs["params"]["q"] == "AAPL"
+        return httpx.Response(
+            200,
+            request=httpx.Request("GET", url),
+            json={
+                "quotes": [
+                    {"symbol": "AAPL.MX", "industryDisp": "Wrong Industry"},
+                    {"symbol": "AAPL", "industryDisp": "Consumer Electronics"},
+                ]
+            },
+        )
+
+    monkeypatch.setattr("app.main.httpx.get", fake_get)
+
+    assert fetch_industry("AAPL") == "Consumer Electronics"
+
+def test_fetch_industry_falls_back_to_profile(monkeypatch):
+    fetch_industry.cache_clear()
+
+    def fake_get(url, **kwargs):
+        if "finance/search" in url:
+            return httpx.Response(200, request=httpx.Request("GET", url), json={"quotes": []})
+        return httpx.Response(
+            200,
+            request=httpx.Request("GET", url),
+            json={
+                "quoteSummary": {
+                    "result": [{"assetProfile": {"industry": "Software - Application"}}]
+                }
+            },
+        )
+
+    monkeypatch.setattr("app.main.httpx.get", fake_get)
+
+    assert fetch_industry("APP") == "Software - Application"
 
 def test_starting_universe_has_250_smaller_companies():
     html = open("app/static/index.html", encoding="utf-8").read()
