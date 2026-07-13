@@ -35,6 +35,9 @@ helm upgrade --install market-maker-scout helm/market-maker-scout \
 - `SLACK_WEBHOOK_URL`: Slack incoming webhook
 - `OPENAI_API_KEY`: Codex authentication for failure analysis
 
+## Optional GitHub secrets
+- `GHCR_PULL_TOKEN`: long-lived token with `read:packages` access for Kubernetes image pulls. If omitted, CI uses the workflow token to create the pull secret during deployment.
+
 ## Production roadmap
 1. Replace prototype Yahoo Finance chart fetches with a licensed data provider supporting intraday trades/quotes and volume with explicit latency guarantees.
 2. Store observations in PostgreSQL/TimescaleDB; add Redis and Celery/Arq workers for 250-symbol scans.

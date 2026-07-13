@@ -31,6 +31,10 @@ jobs:
     if: github.event_name == 'push'
     needs: test-build
     runs-on: [self-hosted, macOS]
+    env:
+      NAMESPACE: market-maker-scout
+      IMAGE_PULL_SECRET: ghcr-pull-secret
+      KUBE_CONFIG_B64: ${{ secrets.KUBE_CONFIG }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -43,12 +47,33 @@ jobs:
         uses: azure/setup-kubectl@v4
       - name: Install Codex CLI
         run: command -v codex >/dev/null || npm install -g @openai/codex || true
+      - name: Configure kubeconfig
+        if: ${{ env.KUBE_CONFIG_B64 != '' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/kube"
+          echo "$KUBE_CONFIG_B64" | base64 --decode > "$RUNNER_TEMP/kube/config"
+          chmod 600 "$RUNNER_TEMP/kube/config"
+          echo "KUBECONFIG=$RUNNER_TEMP/kube/config" >> "$GITHUB_ENV"
       - name: Verify local cluster access
         run: kubectl cluster-info
+      - name: Configure GHCR image pull secret
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GHCR_PULL_TOKEN || github.token }}
+        run: |
+          kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create secret docker-registry "$IMAGE_PULL_SECRET" \
+            --namespace "$NAMESPACE" \
+            --docker-server=ghcr.io \
+            --docker-username="$GHCR_USERNAME" \
+            --docker-password="$GHCR_TOKEN" \
+            --dry-run=client -o yaml | kubectl apply -f -
       - name: Deploy and advise on failure
         env:
           IMAGE_REPOSITORY: ghcr.io/${{ github.repository }}
           IMAGE_TAG: ${{ github.sha }}
+          IMAGE_PULL_SECRET: ${{ env.IMAGE_PULL_SECRET }}
+          NAMESPACE: ${{ env.NAMESPACE }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: ./scripts/deploy.sh

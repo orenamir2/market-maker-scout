@@ -4,6 +4,7 @@ RELEASE=${RELEASE:-market-maker-scout}
 NAMESPACE=${NAMESPACE:-market-maker-scout}
 IMAGE_REPOSITORY=${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required}
 IMAGE_TAG=${IMAGE_TAG:?IMAGE_TAG is required}
+IMAGE_PULL_SECRET=${IMAGE_PULL_SECRET:-}
 SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
 ADVICE_FILE="${GITHUB_WORKSPACE:-$PWD}/deployment-advice.txt"
 
@@ -24,8 +25,21 @@ slack() {
 }
 
 slack "🚀 Deploying $RELEASE:$IMAGE_TAG to namespace $NAMESPACE"
+helm_args=(
+  upgrade --install "$RELEASE" helm/market-maker-scout
+  --namespace "$NAMESPACE"
+  --create-namespace
+  --set "image.repository=$IMAGE_REPOSITORY"
+  --set "image.tag=$IMAGE_TAG"
+  --wait
+  --timeout 5m
+)
+if [ -n "$IMAGE_PULL_SECRET" ]; then
+  helm_args+=(--set "imagePullSecrets[0].name=$IMAGE_PULL_SECRET")
+fi
+
 set +e
-output=$(helm upgrade --install "$RELEASE" helm/market-maker-scout --namespace "$NAMESPACE" --create-namespace --set image.repository="$IMAGE_REPOSITORY" --set image.tag="$IMAGE_TAG" --wait --timeout 5m 2>&1)
+output=$(helm "${helm_args[@]}" 2>&1)
 rc=$?
 set -e
 if [ $rc -eq 0 ]; then

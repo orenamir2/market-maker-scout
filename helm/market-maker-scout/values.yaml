@@ -3,6 +3,7 @@ image:
   repository: ghcr.io/OWNER/market-maker-scout
   tag: latest
   pullPolicy: IfNotPresent
+imagePullSecrets: []
 service:
   type: ClusterIP
   port: 80
