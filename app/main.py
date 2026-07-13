@@ -4,6 +4,7 @@ import hashlib
 import os
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import List
 
 import httpx
@@ -18,6 +19,7 @@ app = FastAPI(title="Market Maker Scout", version="0.1.0")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+YAHOO_PROFILE_URL = "https://query2.finance.yahoo.com/v10/finance/quoteSummary/{ticker}"
 
 
 class ScanRequest(BaseModel):
@@ -37,12 +39,15 @@ class ScanRequest(BaseModel):
 @dataclass
 class ScoreResult:
     ticker: str
+    industry: str
     latest_price: float
     latest_volume: int
     latest_at: str
     data_source: str
     score: float
     confidence: float
+    suggested_signal: str
+    suggested_horizon: str
     volume_z: float
     volume_acceleration: float
     price_volume_corr: float
@@ -63,6 +68,7 @@ class MarketSeries:
     volume: np.ndarray
     latest_at: str
     source: str
+    industry: str = "Unknown"
 
 
 def deterministic_series(ticker: str, days: int = 60) -> tuple[np.ndarray, np.ndarray]:
@@ -86,7 +92,28 @@ def demo_market_series(ticker: str) -> MarketSeries:
         volume=volume,
         latest_at="demo",
         source="demo",
+        industry="Unknown",
     )
+
+
+@lru_cache(maxsize=512)
+def fetch_industry(ticker: str) -> str:
+    """Best-effort company industry lookup for scan context."""
+    try:
+        response = httpx.get(
+            YAHOO_PROFILE_URL.format(ticker=ticker),
+            params={"modules": "assetProfile"},
+            headers={"User-Agent": "market-maker-scout/0.1"},
+            timeout=5.0,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        results = payload.get("quoteSummary", {}).get("result") or []
+        profile = (results[0] if results else {}).get("assetProfile") or {}
+        industry = str(profile.get("industry") or "").strip()
+        return industry or "Unknown"
+    except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError):
+        return "Unknown"
 
 
 def fetch_live_market_series(ticker: str) -> MarketSeries:
@@ -134,6 +161,7 @@ def fetch_live_market_series(ticker: str) -> MarketSeries:
         volume=np.array([row[2] for row in recent_rows], dtype=float),
         latest_at=latest_at,
         source="yahoo_finance_chart",
+        industry=fetch_industry(ticker),
     )
 
 
@@ -153,6 +181,18 @@ def t_stat(values: np.ndarray) -> float:
     if std == 0:
         return 0.0
     return float(np.mean(values) / (std / np.sqrt(len(values))))
+
+
+def suggested_signal(score: float) -> tuple[str, str]:
+    if score >= 80:
+        return ("Strong research watchlist signal; require price/volume confirmation before entry.", "1-4 weeks")
+    if score >= 70:
+        return ("Positive research watchlist signal; monitor for confirmation.", "1-2 weeks")
+    if score >= 60:
+        return ("Mild signal; watch only unless follow-through improves.", "Several trading days")
+    if score >= 45:
+        return ("Neutral signal; no standalone bullish edge from this scan.", "No suggested hold")
+    return ("Weak signal; avoid as a bullish setup from this scan.", "No suggested hold")
 
 
 def score_ticker(ticker: str, market_series: MarketSeries | None = None) -> ScoreResult:
@@ -216,6 +256,7 @@ def score_ticker(ticker: str, market_series: MarketSeries | None = None) -> Scor
 
     # Convert distance from neutral to a model confidence proxy.
     confidence = float(np.clip(2 * abs(norm.cdf(raw * 2.2) - 0.5) * 100, 0, 99))
+    signal, horizon = suggested_signal(score)
     explanation = (
         f"Vol z {volume_z:.2f}σ, accel {volume_acceleration:.2f}σ; "
         f"price/volume corr {price_volume_corr:.2f}; OBV slope {accumulation_slope:.3f}; "
@@ -225,12 +266,15 @@ def score_ticker(ticker: str, market_series: MarketSeries | None = None) -> Scor
     )
     return ScoreResult(
         ticker=ticker,
+        industry=market_series.industry,
         latest_price=round(float(prices[-1]), 2),
         latest_volume=int(volume[-1]),
         latest_at=market_series.latest_at,
         data_source=market_series.source,
         score=round(score, 1),
         confidence=round(confidence, 1),
+        suggested_signal=signal,
+        suggested_horizon=horizon,
         volume_z=round(volume_z, 2),
         volume_acceleration=round(volume_acceleration, 2),
         price_volume_corr=round(price_volume_corr, 2),

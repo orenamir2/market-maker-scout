@@ -1,6 +1,6 @@
 import numpy as np
 
-from app.main import MarketSeries, ScanRequest, score_ticker
+from app.main import MarketSeries, ScanRequest, score_ticker, suggested_signal
 
 def test_score_range():
     result = score_ticker("AAPL")
@@ -33,12 +33,23 @@ def test_score_includes_latest_market_metadata():
         volume=np.linspace(1000, 2000, 60),
         latest_at="2026-07-13T20:00:00+00:00",
         source="test_provider",
+        industry="Software - Application",
     )
     result = score_ticker("TEST", series)
+    assert result.industry == "Software - Application"
     assert result.latest_price == 20
     assert result.latest_volume == 2000
     assert result.latest_at == "2026-07-13T20:00:00+00:00"
     assert result.data_source == "test_provider"
+    assert result.suggested_signal
+    assert result.suggested_horizon
+
+def test_suggested_signal_bands():
+    assert suggested_signal(85)[1] == "1-4 weeks"
+    assert suggested_signal(75)[1] == "1-2 weeks"
+    assert suggested_signal(65)[1] == "Several trading days"
+    assert suggested_signal(50)[1] == "No suggested hold"
+    assert suggested_signal(40)[1] == "No suggested hold"
 
 def test_ticker_normalization():
     req = ScanRequest(tickers=[" aapl ", "MSFT", "AAPL"])
