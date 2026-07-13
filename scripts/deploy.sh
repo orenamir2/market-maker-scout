@@ -1,13 +1,27 @@
 #!/usr/bin/env bash
-set -uo pipefail
-set -xv
+set -Eeuo pipefail
 RELEASE=${RELEASE:-market-maker-scout}
 NAMESPACE=${NAMESPACE:-market-maker-scout}
 IMAGE_REPOSITORY=${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required}
 IMAGE_TAG=${IMAGE_TAG:?IMAGE_TAG is required}
 SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
+ADVICE_FILE="${GITHUB_WORKSPACE:-$PWD}/deployment-advice.txt"
 
-slack(){ [ -z "$SLACK_WEBHOOK_URL" ] || curl -fsS -X POST -H 'Content-type: application/json' --data "{\"text\":$(python -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1")}" "$SLACK_WEBHOOK_URL" >/dev/null; }
+json_quote() {
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"
+  else
+    python -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"
+  fi
+}
+
+slack() {
+  [ -z "$SLACK_WEBHOOK_URL" ] && return 0
+  payload=$(json_quote "$1" 2>/dev/null) || return 0
+  curl -fsS -X POST -H 'Content-type: application/json' \
+    --data "{\"text\":$payload}" \
+    "$SLACK_WEBHOOK_URL" >/dev/null || true
+}
 
 slack "🚀 Deploying $RELEASE:$IMAGE_TAG to namespace $NAMESPACE"
 set +e
@@ -28,6 +42,6 @@ advice="Codex advisor unavailable"
 if command -v codex >/dev/null 2>&1; then
   advice=$(codex exec --sandbox read-only "Analyze this failed Helm/Kubernetes deployment. Do not change files. Give: likely root cause, evidence, exact commands to verify, and a minimal proposed fix. Helm output: $(cat /tmp/helm-error.txt) Kubernetes state: $(cat /tmp/k8s-state.txt)" 2>&1 || true)
 fi
-printf '%s\n' "$advice" > deployment-advice.txt
+printf '%s\n' "$advice" > "$ADVICE_FILE"
 slack "❌ Deployment failed for $RELEASE:$IMAGE_TAG. Codex recommendation:\n${advice:0:2500}"
 exit $rc

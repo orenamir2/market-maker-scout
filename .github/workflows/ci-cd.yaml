@@ -7,7 +7,7 @@ permissions:
   contents: read
   packages: write
 jobs:
-  test-build-deploy:
+  test-build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,22 +26,26 @@ jobs:
           context: .
           push: ${{ github.event_name == 'push' }}
           tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
+
+  deploy:
+    if: github.event_name == 'push'
+    needs: test-build
+    runs-on: [self-hosted, macOS]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
       - name: Install Helm
-        if: github.event_name == 'push'
         uses: azure/setup-helm@v4
       - name: Install kubectl
-        if: github.event_name == 'push'
         uses: azure/setup-kubectl@v4
       - name: Install Codex CLI
-        if: github.event_name == 'push'
-        run: npm install -g @openai/codex
-      - name: Configure cluster
-        if: github.event_name == 'push'
-        run: |
-          mkdir -p ~/.kube
-          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > ~/.kube/config
+        run: command -v codex >/dev/null || npm install -g @openai/codex || true
+      - name: Verify local cluster access
+        run: kubectl cluster-info
       - name: Deploy and advise on failure
-        if: github.event_name == 'push'
         env:
           IMAGE_REPOSITORY: ghcr.io/${{ github.repository }}
           IMAGE_TAG: ${{ github.sha }}
