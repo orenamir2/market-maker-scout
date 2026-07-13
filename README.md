@@ -4,7 +4,7 @@ Kubernetes-first experimental web application that ranks up to 250 tickers using
 
 ## Architecture
 - FastAPI backend and simple browser UI
-- Pluggable market-data/scoring layer (demo data included)
+- Pluggable market-data/scoring layer with live Yahoo Finance chart fetches by default (demo data mode still available)
 - Docker image and Helm chart
 - GitHub Actions CI/CD
 - Slack deployment notifications
@@ -17,6 +17,8 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 Open http://localhost:8000.
+
+By default each scan fetches the latest available daily bars from the configured provider. Set `DATA_MODE=demo` to use deterministic synthetic data for offline development and tests. Provider bars may be delayed; use a licensed feed for production-grade real-time guarantees.
 
 ## Kubernetes
 ```bash
@@ -34,7 +36,7 @@ helm upgrade --install market-maker-scout helm/market-maker-scout \
 - `OPENAI_API_KEY`: Codex authentication for failure analysis
 
 ## Production roadmap
-1. Replace deterministic demo data with a licensed data provider supporting intraday trades/quotes and volume.
+1. Replace prototype Yahoo Finance chart fetches with a licensed data provider supporting intraday trades/quotes and volume with explicit latency guarantees.
 2. Store observations in PostgreSQL/TimescaleDB; add Redis and Celery/Arq workers for 250-symbol scans.
 3. Add features: abnormal volume, VWAP behavior, OBV/CMF, block-trade proxy, spread/liquidity changes, relative strength, regime adjustment.
 4. Backtest with walk-forward validation; calibrate confidence using out-of-sample precision, not distance from a heuristic score.

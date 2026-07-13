@@ -3,8 +3,10 @@ from __future__ import annotations
 import hashlib
 import os
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from typing import List
 
+import httpx
 import numpy as np
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -14,6 +16,8 @@ from scipy.stats import norm
 
 app = FastAPI(title="Market Maker Scout", version="0.1.0")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
+
+YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
 
 
 class ScanRequest(BaseModel):
@@ -33,6 +37,10 @@ class ScanRequest(BaseModel):
 @dataclass
 class ScoreResult:
     ticker: str
+    latest_price: float
+    latest_volume: int
+    latest_at: str
+    data_source: str
     score: float
     confidence: float
     volume_z: float
@@ -49,6 +57,14 @@ class ScoreResult:
     explanation: str
 
 
+@dataclass
+class MarketSeries:
+    prices: np.ndarray
+    volume: np.ndarray
+    latest_at: str
+    source: str
+
+
 def deterministic_series(ticker: str, days: int = 60) -> tuple[np.ndarray, np.ndarray]:
     """Demo-only deterministic market data. Replace with a real provider in production."""
     seed = int(hashlib.sha256(ticker.encode()).hexdigest()[:8], 16)
@@ -61,6 +77,64 @@ def deterministic_series(ticker: str, days: int = 60) -> tuple[np.ndarray, np.nd
         base_volume[-10:] *= np.linspace(1.2, 2.4, 10)
         prices[-10:] *= np.linspace(1.0, 1.08, 10)
     return prices, base_volume
+
+
+def demo_market_series(ticker: str) -> MarketSeries:
+    prices, volume = deterministic_series(ticker)
+    return MarketSeries(
+        prices=prices,
+        volume=volume,
+        latest_at="demo",
+        source="demo",
+    )
+
+
+def fetch_live_market_series(ticker: str) -> MarketSeries:
+    """Fetch the latest available daily bars for a ticker.
+
+    Yahoo's public chart endpoint is suitable for this prototype, but production use
+    should switch to a licensed market-data provider with clear latency guarantees.
+    """
+    response = httpx.get(
+        YAHOO_CHART_URL.format(ticker=ticker),
+        params={"range": "3mo", "interval": "1d"},
+        headers={"User-Agent": "market-maker-scout/0.1"},
+        timeout=10.0,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    chart = payload.get("chart", {})
+    error = chart.get("error")
+    if error:
+        raise ValueError(error.get("description") or f"No chart data for {ticker}")
+
+    results = chart.get("result") or []
+    if not results:
+        raise ValueError(f"No chart data for {ticker}")
+
+    result = results[0]
+    timestamps = result.get("timestamp") or []
+    quotes = (result.get("indicators", {}).get("quote") or [{}])[0]
+    closes = quotes.get("close") or []
+    volumes = quotes.get("volume") or []
+
+    rows = [
+        (ts, close, vol)
+        for ts, close, vol in zip(timestamps, closes, volumes)
+        if close is not None and vol is not None
+    ]
+    if len(rows) < 41:
+        raise ValueError(f"Not enough recent data for {ticker}")
+
+    recent_rows = rows[-60:]
+    latest_timestamp = recent_rows[-1][0]
+    latest_at = datetime.fromtimestamp(latest_timestamp, tz=timezone.utc).isoformat()
+    return MarketSeries(
+        prices=np.array([row[1] for row in recent_rows], dtype=float),
+        volume=np.array([row[2] for row in recent_rows], dtype=float),
+        latest_at=latest_at,
+        source="yahoo_finance_chart",
+    )
 
 
 def safe_corr(a: np.ndarray, b: np.ndarray) -> float:
@@ -81,8 +155,10 @@ def t_stat(values: np.ndarray) -> float:
     return float(np.mean(values) / (std / np.sqrt(len(values))))
 
 
-def score_ticker(ticker: str) -> ScoreResult:
-    prices, volume = deterministic_series(ticker)
+def score_ticker(ticker: str, market_series: MarketSeries | None = None) -> ScoreResult:
+    market_series = market_series or demo_market_series(ticker)
+    prices = market_series.prices
+    volume = market_series.volume
     returns = np.diff(np.log(prices), prepend=np.log(prices[0]))
 
     vol_mean = volume[:-10].mean()
@@ -149,6 +225,10 @@ def score_ticker(ticker: str) -> ScoreResult:
     )
     return ScoreResult(
         ticker=ticker,
+        latest_price=round(float(prices[-1]), 2),
+        latest_volume=int(volume[-1]),
+        latest_at=market_series.latest_at,
+        data_source=market_series.source,
         score=round(score, 1),
         confidence=round(confidence, 1),
         volume_z=round(volume_z, 2),
@@ -180,9 +260,29 @@ def healthz() -> dict[str, str]:
 def scan(request: ScanRequest) -> dict:
     if len(request.tickers) > 250:
         raise HTTPException(status_code=400, detail="Maximum 250 tickers")
-    results = sorted((score_ticker(t) for t in request.tickers), key=lambda x: x.score, reverse=True)
+    mode = os.getenv("DATA_MODE", "live").lower()
+    results = []
+    errors = []
+    for ticker in request.tickers:
+        try:
+            market_series = demo_market_series(ticker) if mode == "demo" else fetch_live_market_series(ticker)
+            results.append(score_ticker(ticker, market_series))
+        except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
+            errors.append({"ticker": ticker, "error": str(exc)})
+
+    if not results and errors:
+        raise HTTPException(status_code=502, detail={"message": "No market data could be fetched", "errors": errors})
+
+    results = sorted(results, key=lambda x: x.score, reverse=True)
+    warning = (
+        "Research ranking only. Live values use the latest available provider bars and may be delayed; "
+        "not proof of market-maker buying and not financial advice."
+        if mode != "demo"
+        else "Research ranking only. Demo mode uses synthetic data and is not financial advice."
+    )
     return {
-        "mode": os.getenv("DATA_MODE", "demo"),
-        "warning": "Research ranking only. It does not identify market makers directly and is not financial advice.",
+        "mode": mode,
+        "warning": warning,
+        "errors": errors,
         "results": [asdict(r) for r in results],
     }

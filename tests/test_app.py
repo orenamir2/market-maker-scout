@@ -1,9 +1,12 @@
-from app.main import ScanRequest, score_ticker
+import numpy as np
+
+from app.main import MarketSeries, ScanRequest, score_ticker
 
 def test_score_range():
     result = score_ticker("AAPL")
     assert 0 <= result.score <= 100
     assert 0 <= result.confidence <= 100
+    assert result.data_source == "demo"
 
 def test_score_uses_multiple_statistical_components():
     result = score_ticker("AAPL")
@@ -23,6 +26,19 @@ def test_score_uses_multiple_statistical_components():
     assert all(-1 <= value <= 1 for value in result.score_components.values())
     assert result.volume_acceleration is not None
     assert result.return_t_stat is not None
+
+def test_score_includes_latest_market_metadata():
+    series = MarketSeries(
+        prices=np.linspace(10, 20, 60),
+        volume=np.linspace(1000, 2000, 60),
+        latest_at="2026-07-13T20:00:00+00:00",
+        source="test_provider",
+    )
+    result = score_ticker("TEST", series)
+    assert result.latest_price == 20
+    assert result.latest_volume == 2000
+    assert result.latest_at == "2026-07-13T20:00:00+00:00"
+    assert result.data_source == "test_provider"
 
 def test_ticker_normalization():
     req = ScanRequest(tickers=[" aapl ", "MSFT", "AAPL"])

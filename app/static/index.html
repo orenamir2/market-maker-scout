@@ -24,6 +24,10 @@
     <thead>
       <tr>
         <th>Ticker</th>
+        <th>Latest Price</th>
+        <th>Latest Volume</th>
+        <th>Latest At</th>
+        <th>Source</th>
         <th>Score</th>
         <th>Confidence</th>
         <th>Volume Z</th>
@@ -49,9 +53,11 @@
         body: JSON.stringify({tickers})
       });
       const d = await r.json();
-      document.getElementById('status').textContent = d.warning || d.detail || '';
+      const skipped = (d.errors || []).length ? ` Skipped ${d.errors.length} ticker(s) with unavailable data.` : '';
+      document.getElementById('status').textContent = `${d.warning || d.detail || ''}${skipped}`;
+      const fmt = value => value == null ? '' : String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
       document.getElementById('rows').innerHTML = (d.results || []).map(x =>
-        `<tr><td>${x.ticker}</td><td>${x.score}</td><td>${x.confidence}%</td><td>${x.volume_z}</td><td>${x.volume_acceleration}</td><td>${x.relative_strength}%</td><td>${x.momentum_z}</td><td>${x.return_t_stat}</td><td>${x.up_down_volume_ratio}</td><td>${x.volatility_compression}</td><td>${x.drawdown_resilience}%</td><td>${x.explanation}</td></tr>`
+        `<tr><td>${fmt(x.ticker)}</td><td>${fmt(x.latest_price)}</td><td>${fmt(x.latest_volume)}</td><td>${fmt(x.latest_at)}</td><td>${fmt(x.data_source)}</td><td>${fmt(x.score)}</td><td>${fmt(x.confidence)}%</td><td>${fmt(x.volume_z)}</td><td>${fmt(x.volume_acceleration)}</td><td>${fmt(x.relative_strength)}%</td><td>${fmt(x.momentum_z)}</td><td>${fmt(x.return_t_stat)}</td><td>${fmt(x.up_down_volume_ratio)}</td><td>${fmt(x.volatility_compression)}</td><td>${fmt(x.drawdown_resilience)}%</td><td>${fmt(x.explanation)}</td></tr>`
       ).join('');
     }
   </script>
