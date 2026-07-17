@@ -16,3 +16,12 @@ resources:
   limits: {cpu: 500m, memory: 512Mi}
 env:
   DATA_MODE: live
+  SCAN_HISTORY_DIR: /data/scan-history
+persistence:
+  enabled: false
+  size: 1Gi
+  storageClassName: ""
+dailyScan:
+  enabled: false
+  schedule: "0 21 * * 1-5"
+  tickers: []

@@ -22,6 +22,19 @@ spec:
           env:
             - name: DATA_MODE
               value: {{ .Values.env.DATA_MODE | quote }}
+            - name: SCAN_HISTORY_DIR
+              value: {{ .Values.env.SCAN_HISTORY_DIR | quote }}
+          volumeMounts:
+            - name: scan-history
+              mountPath: /data
           readinessProbe: {httpGet: {path: /healthz, port: 8000}, initialDelaySeconds: 3, periodSeconds: 5}
           livenessProbe: {httpGet: {path: /healthz, port: 8000}, initialDelaySeconds: 10, periodSeconds: 10}
           resources: {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: scan-history
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-scan-history
+          {{- else }}
+          emptyDir: {}
+          {{- end }}

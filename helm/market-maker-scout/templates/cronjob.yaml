@@ -1,0 +1,31 @@
+{{- if .Values.dailyScan.enabled }}
+{{- if not .Values.dailyScan.tickers }}
+{{- fail "dailyScan.tickers must contain at least one ticker when dailyScan.enabled is true" }}
+{{- end }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-daily-scan
+spec:
+  schedule: {{ .Values.dailyScan.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: daily-scan
+              image: curlimages/curl:8.10.1
+              imagePullPolicy: IfNotPresent
+              command: ["/bin/sh", "-ec"]
+              args:
+                - |
+                  curl --fail --show-error --silent \
+                    -H 'content-type: application/json' \
+                    -X POST \
+                    --data '{{ dict "tickers" .Values.dailyScan.tickers "save" true | toJson }}' \
+                    http://{{ .Release.Name }}:{{ .Values.service.port }}/api/scan
+{{- end }}

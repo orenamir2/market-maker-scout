@@ -1,7 +1,18 @@
+from dataclasses import replace
+
 import numpy as np
 import httpx
 
-from app.main import MarketSeries, ScanRequest, fetch_industry, score_ticker, suggested_signal
+from app.main import (
+    MarketSeries,
+    ScanRequest,
+    fetch_industry,
+    find_score_growth_candidates,
+    load_scan_history,
+    save_daily_scan,
+    score_ticker,
+    suggested_signal,
+)
 
 def test_score_range():
     result = score_ticker("AAPL")
@@ -55,6 +66,40 @@ def test_suggested_signal_bands():
 def test_ticker_normalization():
     req = ScanRequest(tickers=[" aapl ", "MSFT", "AAPL"])
     assert req.tickers == ["AAPL", "MSFT"]
+    assert req.save is True
+
+def test_scan_history_saves_and_merges_by_day(tmp_path, monkeypatch):
+    monkeypatch.setenv("SCAN_HISTORY_DIR", str(tmp_path))
+    first = replace(score_ticker("AAA"), score=51.2)
+    second = replace(score_ticker("BBB"), score=72.4)
+    updated_first = replace(score_ticker("AAA"), score=54.8)
+
+    save_daily_scan([first, second], mode="demo", day="2026-07-15")
+    save_daily_scan([updated_first], mode="demo", day="2026-07-15")
+
+    history = load_scan_history()
+    assert len(history) == 1
+    assert history[0]["date"] == "2026-07-15"
+    scores = {result["ticker"]: result["score"] for result in history[0]["results"]}
+    assert scores == {"AAA": 54.8, "BBB": 72.4}
+
+def test_find_score_growth_candidates_uses_approximate_bands(tmp_path, monkeypatch):
+    monkeypatch.setenv("SCAN_HISTORY_DIR", str(tmp_path))
+    start = replace(score_ticker("AAA"), score=52.0)
+    latest = replace(score_ticker("AAA"), score=69.5)
+    flat = replace(score_ticker("BBB"), score=50.5)
+
+    save_daily_scan([start, flat], mode="demo", day="2026-07-13")
+    save_daily_scan([latest, flat], mode="demo", day="2026-07-16")
+
+    candidates = find_score_growth_candidates(
+        start_score=50,
+        target_score=70,
+        tolerance=8,
+        max_days=7,
+    )
+    assert [candidate["ticker"] for candidate in candidates] == ["AAA"]
+    assert candidates[0]["score_change"] == 17.5
 
 def test_fetch_industry_uses_search_exact_symbol_match(monkeypatch):
     fetch_industry.cache_clear()

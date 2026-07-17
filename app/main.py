@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
+from pathlib import Path
 from typing import List
 
 import httpx
@@ -21,10 +23,12 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
 YAHOO_PROFILE_URL = "https://query2.finance.yahoo.com/v10/finance/quoteSummary/{ticker}"
 YAHOO_SEARCH_URL = "https://query2.finance.yahoo.com/v1/finance/search"
+DEFAULT_HISTORY_DIR = "data/scan-history"
 
 
 class ScanRequest(BaseModel):
     tickers: List[str] = Field(min_length=1, max_length=250)
+    save: bool = True
 
     @field_validator("tickers")
     @classmethod
@@ -35,6 +39,13 @@ class ScanRequest(BaseModel):
         if not cleaned:
             raise ValueError("At least one ticker is required")
         return cleaned
+
+
+class TrendRequest(BaseModel):
+    start_score: float = Field(default=50, ge=0, le=100)
+    target_score: float = Field(default=70, ge=0, le=100)
+    tolerance: float = Field(default=8, ge=0, le=25)
+    max_days: int = Field(default=7, ge=2, le=60)
 
 
 @dataclass
@@ -95,6 +106,123 @@ def demo_market_series(ticker: str) -> MarketSeries:
         source="demo",
         industry="Unknown",
     )
+
+
+def scan_history_dir() -> Path:
+    return Path(os.getenv("SCAN_HISTORY_DIR", DEFAULT_HISTORY_DIR))
+
+
+def scan_date() -> str:
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def history_file(day: str) -> Path:
+    return scan_history_dir() / f"{day}.json"
+
+
+def load_daily_scan(day: str) -> dict:
+    path = history_file(day)
+    if not path.exists():
+        return {"date": day, "results": []}
+    with path.open(encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def save_daily_scan(results: list[ScoreResult], mode: str, day: str | None = None) -> None:
+    day = day or scan_date()
+    path = history_file(day)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing = load_daily_scan(day)
+    by_ticker = {
+        str(result.get("ticker", "")).upper(): result
+        for result in existing.get("results", [])
+        if result.get("ticker")
+    }
+    for result in results:
+        row = asdict(result)
+        row["scanned_at"] = datetime.now(timezone.utc).isoformat()
+        by_ticker[result.ticker] = row
+
+    payload = {
+        "date": day,
+        "mode": mode,
+        "saved_at": datetime.now(timezone.utc).isoformat(),
+        "results": sorted(by_ticker.values(), key=lambda x: x["score"], reverse=True),
+    }
+    temp_path = path.with_suffix(".tmp")
+    with temp_path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2)
+    temp_path.replace(path)
+
+
+def load_scan_history(max_days: int = 60) -> list[dict]:
+    root = scan_history_dir()
+    if not root.exists():
+        return []
+    files = sorted(root.glob("*.json"), reverse=True)[:max_days]
+    history = []
+    for path in sorted(files):
+        try:
+            with path.open(encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            continue
+        history.append(payload)
+    return history
+
+
+def find_score_growth_candidates(
+    start_score: float = 50,
+    target_score: float = 70,
+    tolerance: float = 8,
+    max_days: int = 7,
+) -> list[dict]:
+    histories: dict[str, list[dict]] = {}
+    for daily_scan in load_scan_history(max_days=max_days):
+        day = daily_scan.get("date")
+        for result in daily_scan.get("results", []):
+            ticker = result.get("ticker")
+            score = result.get("score")
+            if not ticker or score is None:
+                continue
+            histories.setdefault(str(ticker), []).append(
+                {
+                    "date": day,
+                    "score": float(score),
+                    "industry": result.get("industry", "Unknown"),
+                    "latest_price": result.get("latest_price"),
+                    "latest_at": result.get("latest_at"),
+                    "suggested_signal": result.get("suggested_signal", ""),
+                }
+            )
+
+    candidates = []
+    for ticker, points in histories.items():
+        points = sorted(points, key=lambda point: point["date"])
+        if len(points) < 2:
+            continue
+        first = points[0]
+        last = points[-1]
+        first_is_near_start = abs(first["score"] - start_score) <= tolerance
+        last_is_near_target = abs(last["score"] - target_score) <= tolerance
+        if first_is_near_start and last_is_near_target and last["score"] > first["score"]:
+            candidates.append(
+                {
+                    "ticker": ticker,
+                    "industry": last["industry"],
+                    "start_date": first["date"],
+                    "start_score": round(first["score"], 1),
+                    "latest_date": last["date"],
+                    "latest_score": round(last["score"], 1),
+                    "score_change": round(last["score"] - first["score"], 1),
+                    "latest_price": last["latest_price"],
+                    "latest_at": last["latest_at"],
+                    "suggested_signal": last["suggested_signal"],
+                    "history": points,
+                }
+            )
+
+    return sorted(candidates, key=lambda item: item["score_change"], reverse=True)
 
 
 @lru_cache(maxsize=512)
@@ -346,6 +474,8 @@ def scan(request: ScanRequest) -> dict:
         raise HTTPException(status_code=502, detail={"message": "No market data could be fetched", "errors": errors})
 
     results = sorted(results, key=lambda x: x.score, reverse=True)
+    if request.save:
+        save_daily_scan(results, mode)
     warning = (
         "Research ranking only. Live values use the latest available provider bars and may be delayed; "
         "not proof of market-maker buying and not financial advice."
@@ -356,5 +486,31 @@ def scan(request: ScanRequest) -> dict:
         "mode": mode,
         "warning": warning,
         "errors": errors,
+        "saved": request.save,
+        "scan_date": scan_date(),
         "results": [asdict(r) for r in results],
+    }
+
+
+@app.get("/api/history")
+def history(max_days: int = 14) -> dict:
+    return {"history": load_scan_history(max_days=max(1, min(max_days, 60)))}
+
+
+@app.get("/api/trends")
+def trends(
+    start_score: float = 50,
+    target_score: float = 70,
+    tolerance: float = 8,
+    max_days: int = 7,
+) -> dict:
+    trend_request = TrendRequest(
+        start_score=start_score,
+        target_score=target_score,
+        tolerance=tolerance,
+        max_days=max_days,
+    )
+    return {
+        "criteria": trend_request.model_dump(),
+        "candidates": find_score_growth_candidates(**trend_request.model_dump()),
     }
