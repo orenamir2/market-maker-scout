@@ -23,5 +23,5 @@ persistence:
   storageClassName: ""
 dailyScan:
   enabled: false
-  schedule: "0 21 * * 1-5"
+  schedule: "0 21 * * *"
   tickers: []
