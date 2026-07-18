@@ -24,6 +24,12 @@ spec:
               value: {{ .Values.env.DATA_MODE | quote }}
             - name: SCAN_HISTORY_DIR
               value: {{ .Values.env.SCAN_HISTORY_DIR | quote }}
+            - name: SCAN_WORKERS
+              value: {{ .Values.env.SCAN_WORKERS | quote }}
+            - name: MARKET_DATA_TIMEOUT_SECONDS
+              value: {{ .Values.env.MARKET_DATA_TIMEOUT_SECONDS | quote }}
+            - name: INDUSTRY_TIMEOUT_SECONDS
+              value: {{ .Values.env.INDUSTRY_TIMEOUT_SECONDS | quote }}
           volumeMounts:
             - name: scan-history
               mountPath: /data

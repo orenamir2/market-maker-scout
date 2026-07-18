@@ -8,6 +8,7 @@
     body{font-family:system-ui;max-width:1100px;margin:40px auto;padding:0 16px}
     textarea{width:100%;height:180px}
     button{padding:10px 18px;margin:12px 0}
+    button:disabled{opacity:.6}
     table{border-collapse:collapse;width:100%}
     th,td{padding:8px;border-bottom:1px solid #ddd;text-align:left}
     .warn{background:#fff4cc;padding:12px}
@@ -41,7 +42,7 @@
   <h2>Run Scan</h2>
   <textarea id="tickers">CPF,GDRX,FAC,LUCK,CCNE,EEX,FUBO,PLOW,SG,GSBD,BVS,PSUS,SCHL,GRPN,EQBK,GO,LXRX,BFST,MBWM,NNE,AMTB,ARRY,TROX,PHAR,WSR,KFRC,ABR,HSLV,KDK,INMD,ODD,COUR,BCX,MFA,QNST,GERN,DAKT,NAK,ASA,HAFC,TK,RDVT,TRST,AVR,ANNX,DSGN,ABUS,LBRX,GOOS,NBBK,ESRT,CSR,FTH,ANRO,BLDP,BKSY,GLAS,WRLD,CRCT,EIG,FTK,REPL,BBSI,BUR,KOP,KBDC,NXDR,CAC,AEBI,GILT,ARKO,LMB,GLIBA,FBRX,UMAC,IVA,TBN,BBDC,PMT,HIVE,GLIBK,THFF,NPK,ACDC,LYTS,BFS,HPK,RJET,EVER,MPB,TALK,RPC,MITK,TBPH,BZH,HMH,DSP,ADSE,GTM,MOV,BH,TDUP,HRTG,CCBG,DGICB,FMNB,GSBC,ALOY,EVEX,MTAL,AHG,GMRS,BCSF,SMP,MAX,MATW,KELYB,WGO,WOOF,ADAM,TRNS,AMPH,HPP,HTB,HSTM,CCU,SMBC,METC,ESPR,MNTN,PGC,CTMX,EGBN,HCMA,CYRX,MFIC,SPFI,APOG,OPFI,KODK,CLYM,ODTX,INR,NX,NABL,PD,PSIX,SMBK,DJCO,MTUS,ORRF,OCS,ZVRA,SPRY,RIGL,ALRS,LXU,SDHC,MAMA,ACRS,SIBN,IMMX,NAVI,VTEX,OFRM,HNRG,FWRG,FDUS,FISI,DRUG,OIO,RSKD,BBNX,SSII,NGVC,NGNE,SHBI,FPH,ONT,HZO,CODI,SKYH,GDOT,SGP,HIPO,NEWP,RPD,HOV,ANGX,OMER,ODV,AGNT,AIAI,CBLL,IBCP,CGBD,LPTH,IVR,SSYS,HYLN,IRWD,KRNT,SABR,GYRE,WEST,CARE,SWIM,EFOR,RGNX,CSTL,CTO,REPX,IBTA,SOC,HSHP,MNPR,BLMN,KOPN,FOXF,PFLT,JBI,SLRC,AURA,SB,PRAA,SHEN,PKE,VBNK,INN,DGICA,GFR,BMM,SWBI,SXC,PAR,NXRT,CADL,MEC,ALLO,CCSI,TIPT,TMS,WASH,PRME,KRT,BWMX,VEL,KRO,MAKO,WHK</textarea>
   <br>
-  <button onclick="scan()">Scan</button>
+  <button id="scanButton" onclick="scan()">Scan</button>
   <div id="status"></div>
   </section>
   <section class="section">
@@ -79,33 +80,68 @@
     async function loadTrends() {
       const status = document.getElementById('trendStatus');
       status.textContent = 'Loading saved score growth...';
-      const r = await fetch('/api/trends?start_score=50&target_score=70&tolerance=8&max_days=7');
-      const d = await r.json();
-      const rows = d.candidates || [];
-      status.textContent = rows.length
-        ? `${rows.length} ticker(s) moved from roughly 50 to roughly 70 in the saved history.`
-        : 'No saved tickers match this pattern yet.';
-      document.getElementById('trendRows').innerHTML = rows.map(x =>
-        `<tr><td>${fmt(x.ticker)}</td><td>${fmt(x.industry)}</td><td>${fmt(x.start_date)} (${fmt(x.start_score)})</td><td>${fmt(x.latest_date)} (${fmt(x.latest_score)})</td><td>${fmt(x.score_change)}</td><td>${fmt(x.latest_price)}</td><td>${fmt(x.suggested_signal)}</td></tr>`
-      ).join('');
+      try {
+        const r = await fetch('/api/trends?start_score=50&target_score=70&tolerance=8&max_days=7');
+        const d = await readJsonResponse(r);
+        const rows = d.candidates || [];
+        status.textContent = rows.length
+          ? `${rows.length} ticker(s) moved from roughly 50 to roughly 70 in the saved history.`
+          : 'No saved tickers match this pattern yet.';
+        document.getElementById('trendRows').innerHTML = rows.map(x =>
+          `<tr><td>${fmt(x.ticker)}</td><td>${fmt(x.industry)}</td><td>${fmt(x.start_date)} (${fmt(x.start_score)})</td><td>${fmt(x.latest_date)} (${fmt(x.latest_score)})</td><td>${fmt(x.score_change)}</td><td>${fmt(x.latest_price)}</td><td>${fmt(x.suggested_signal)}</td></tr>`
+        ).join('');
+      } catch (error) {
+        status.textContent = `Could not load saved score growth: ${error.message}`;
+      }
+    }
+
+    async function readJsonResponse(response) {
+      const contentType = response.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        const text = await response.text();
+        throw new Error(`${response.status} ${response.statusText || 'response'}: ${text.slice(0, 180)}`);
+      }
+      const data = await response.json();
+      if (!response.ok) {
+        const detail = typeof data.detail === 'string'
+          ? data.detail
+          : data.detail?.message || JSON.stringify(data.detail || data);
+        throw new Error(`${response.status} ${response.statusText || 'response'}: ${detail}`);
+      }
+      return data;
     }
 
     async function scan() {
       const tickers = document.getElementById('tickers').value.split(/[\s,]+/).filter(Boolean);
-      document.getElementById('status').textContent = 'Scanning...';
-      const r = await fetch('/api/scan', {
-        method: 'POST',
-        headers: {'content-type': 'application/json'},
-        body: JSON.stringify({tickers})
-      });
-      const d = await r.json();
-      const skipped = (d.errors || []).length ? ` Skipped ${d.errors.length} ticker(s) with unavailable data.` : '';
-      const saved = d.saved ? ` Saved under ${d.scan_date}.` : '';
-      document.getElementById('status').textContent = `${d.warning || d.detail || ''}${skipped}${saved}`;
-      document.getElementById('rows').innerHTML = (d.results || []).map(x =>
-        `<tr><td>${fmt(x.ticker)}</td><td>${fmt(x.industry)}</td><td>${fmt(x.latest_price)}</td><td>${fmt(x.latest_volume)}</td><td>${fmt(x.latest_at)}</td><td>${fmt(x.data_source)}</td><td>${fmt(x.score)}</td><td>${fmt(x.confidence)}%</td><td>${fmt(x.suggested_signal)}</td><td>${fmt(x.suggested_horizon)}</td><td>${fmt(x.volume_z)}</td><td>${fmt(x.volume_acceleration)}</td><td>${fmt(x.relative_strength)}%</td><td>${fmt(x.momentum_z)}</td><td>${fmt(x.return_t_stat)}</td><td>${fmt(x.up_down_volume_ratio)}</td><td>${fmt(x.volatility_compression)}</td><td>${fmt(x.drawdown_resilience)}%</td><td>${fmt(x.explanation)}</td></tr>`
-      ).join('');
-      await loadTrends();
+      const status = document.getElementById('status');
+      const button = document.getElementById('scanButton');
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 300000);
+      status.textContent = `Scanning ${tickers.length} ticker(s)...`;
+      button.disabled = true;
+      try {
+        const r = await fetch('/api/scan', {
+          method: 'POST',
+          headers: {'content-type': 'application/json'},
+          body: JSON.stringify({tickers}),
+          signal: controller.signal
+        });
+        const d = await readJsonResponse(r);
+        const skipped = (d.errors || []).length ? ` Skipped ${d.errors.length} ticker(s) with unavailable data.` : '';
+        const saved = d.saved ? ` Saved under ${d.scan_date}.` : '';
+        status.textContent = `Scanned ${d.scanned || 0} of ${d.requested || tickers.length} ticker(s) using ${d.workers || 1} worker(s). ${d.warning || ''}${skipped}${saved}`;
+        document.getElementById('rows').innerHTML = (d.results || []).map(x =>
+          `<tr><td>${fmt(x.ticker)}</td><td>${fmt(x.industry)}</td><td>${fmt(x.latest_price)}</td><td>${fmt(x.latest_volume)}</td><td>${fmt(x.latest_at)}</td><td>${fmt(x.data_source)}</td><td>${fmt(x.score)}</td><td>${fmt(x.confidence)}%</td><td>${fmt(x.suggested_signal)}</td><td>${fmt(x.suggested_horizon)}</td><td>${fmt(x.volume_z)}</td><td>${fmt(x.volume_acceleration)}</td><td>${fmt(x.relative_strength)}%</td><td>${fmt(x.momentum_z)}</td><td>${fmt(x.return_t_stat)}</td><td>${fmt(x.up_down_volume_ratio)}</td><td>${fmt(x.volatility_compression)}</td><td>${fmt(x.drawdown_resilience)}%</td><td>${fmt(x.explanation)}</td></tr>`
+        ).join('');
+        await loadTrends();
+      } catch (error) {
+        status.textContent = error.name === 'AbortError'
+          ? 'Scan timed out after 5 minutes. Try fewer tickers or increase Kubernetes/ingress timeouts.'
+          : `Scan failed: ${error.message}`;
+      } finally {
+        clearTimeout(timeout);
+        button.disabled = false;
+      }
     }
     loadTrends();
   </script>

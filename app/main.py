@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -24,6 +25,10 @@ YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
 YAHOO_PROFILE_URL = "https://query2.finance.yahoo.com/v10/finance/quoteSummary/{ticker}"
 YAHOO_SEARCH_URL = "https://query2.finance.yahoo.com/v1/finance/search"
 DEFAULT_HISTORY_DIR = "data/scan-history"
+DEFAULT_SCAN_WORKERS = 24
+MAX_SCAN_WORKERS = 64
+DEFAULT_MARKET_DATA_TIMEOUT_SECONDS = 6.0
+DEFAULT_INDUSTRY_TIMEOUT_SECONDS = 3.0
 
 
 class ScanRequest(BaseModel):
@@ -114,6 +119,27 @@ def scan_history_dir() -> Path:
 
 def scan_date() -> str:
     return datetime.now(timezone.utc).date().isoformat()
+
+
+def env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+    return max(minimum, min(value, maximum))
+
+
+def env_float(name: str, default: float, minimum: float, maximum: float) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+    return max(minimum, min(value, maximum))
+
+
+def scan_workers(ticker_count: int) -> int:
+    configured = env_int("SCAN_WORKERS", DEFAULT_SCAN_WORKERS, 1, MAX_SCAN_WORKERS)
+    return max(1, min(configured, ticker_count))
 
 
 def history_file(day: str) -> Path:
@@ -229,12 +255,18 @@ def find_score_growth_candidates(
 def fetch_industry(ticker: str) -> str:
     """Best-effort company industry lookup for scan context."""
     headers = {"User-Agent": "market-maker-scout/0.1"}
+    timeout = env_float(
+        "INDUSTRY_TIMEOUT_SECONDS",
+        DEFAULT_INDUSTRY_TIMEOUT_SECONDS,
+        1.0,
+        10.0,
+    )
     try:
         response = httpx.get(
             YAHOO_SEARCH_URL,
             params={"q": ticker, "quotesCount": 6, "newsCount": 0},
             headers=headers,
-            timeout=5.0,
+            timeout=timeout,
         )
         response.raise_for_status()
         payload = response.json()
@@ -260,7 +292,7 @@ def fetch_industry(ticker: str) -> str:
             YAHOO_PROFILE_URL.format(ticker=ticker),
             params={"modules": "assetProfile"},
             headers=headers,
-            timeout=5.0,
+            timeout=timeout,
         )
         response.raise_for_status()
         payload = response.json()
@@ -282,7 +314,12 @@ def fetch_live_market_series(ticker: str) -> MarketSeries:
         YAHOO_CHART_URL.format(ticker=ticker),
         params={"range": "3mo", "interval": "1d"},
         headers={"User-Agent": "market-maker-scout/0.1"},
-        timeout=10.0,
+        timeout=env_float(
+            "MARKET_DATA_TIMEOUT_SECONDS",
+            DEFAULT_MARKET_DATA_TIMEOUT_SECONDS,
+            1.0,
+            20.0,
+        ),
     )
     response.raise_for_status()
     payload = response.json()
@@ -446,6 +483,15 @@ def score_ticker(ticker: str, market_series: MarketSeries | None = None) -> Scor
     )
 
 
+def scan_one_ticker(ticker: str, mode: str) -> ScoreResult:
+    market_series = (
+        demo_market_series(ticker)
+        if mode == "demo"
+        else fetch_live_market_series(ticker)
+    )
+    return score_ticker(ticker, market_series)
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse("app/static/index.html")
@@ -463,12 +509,18 @@ def scan(request: ScanRequest) -> dict:
     mode = os.getenv("DATA_MODE", "live").lower()
     results = []
     errors = []
-    for ticker in request.tickers:
-        try:
-            market_series = demo_market_series(ticker) if mode == "demo" else fetch_live_market_series(ticker)
-            results.append(score_ticker(ticker, market_series))
-        except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
-            errors.append({"ticker": ticker, "error": str(exc)})
+    worker_count = scan_workers(len(request.tickers))
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = {
+            executor.submit(scan_one_ticker, ticker, mode): ticker
+            for ticker in request.tickers
+        }
+        for future in as_completed(futures):
+            ticker = futures[future]
+            try:
+                results.append(future.result())
+            except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
+                errors.append({"ticker": ticker, "error": str(exc)})
 
     if not results and errors:
         raise HTTPException(status_code=502, detail={"message": "No market data could be fetched", "errors": errors})
@@ -486,6 +538,9 @@ def scan(request: ScanRequest) -> dict:
         "mode": mode,
         "warning": warning,
         "errors": errors,
+        "scanned": len(results),
+        "requested": len(request.tickers),
+        "workers": worker_count,
         "saved": request.save,
         "scan_date": scan_date(),
         "results": [asdict(r) for r in results],

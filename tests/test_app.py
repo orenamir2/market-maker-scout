@@ -2,10 +2,12 @@ from dataclasses import replace
 
 import numpy as np
 import httpx
+from fastapi.testclient import TestClient
 
 from app.main import (
     MarketSeries,
     ScanRequest,
+    app,
     fetch_industry,
     find_score_growth_candidates,
     load_scan_history,
@@ -67,6 +69,21 @@ def test_ticker_normalization():
     req = ScanRequest(tickers=[" aapl ", "MSFT", "AAPL"])
     assert req.tickers == ["AAPL", "MSFT"]
     assert req.save is True
+
+def test_scan_api_reports_progress_metadata(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATA_MODE", "demo")
+    monkeypatch.setenv("SCAN_HISTORY_DIR", str(tmp_path))
+    monkeypatch.setenv("SCAN_WORKERS", "2")
+
+    client = TestClient(app)
+    response = client.post("/api/scan", json={"tickers": ["AAPL", "MSFT", "AAPL"]})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["requested"] == 2
+    assert payload["scanned"] == 2
+    assert payload["workers"] == 2
+    assert len(payload["results"]) == 2
 
 def test_scan_history_saves_and_merges_by_day(tmp_path, monkeypatch):
     monkeypatch.setenv("SCAN_HISTORY_DIR", str(tmp_path))
