@@ -30,6 +30,12 @@ helm upgrade --install market-maker-scout helm/market-maker-scout \
   --set image.tag=dev
 ```
 
+Daily scans are designed for a local cluster that may be asleep when the exact
+CronJob time passes. The Helm CronJob calls `/api/daily-scan` on a regular
+schedule, and the app only runs the scan when no dated scan exists for the
+current `SCAN_TIMEZONE` day. This catches the next available window without
+duplicating saved scans for the same date.
+
 ## Required GitHub secrets
 - `KUBE_CONFIG`: base64-encoded kubeconfig with least-privilege access
 - `SLACK_WEBHOOK_URL`: Slack incoming webhook

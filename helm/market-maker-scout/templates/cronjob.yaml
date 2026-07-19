@@ -8,6 +8,10 @@ metadata:
   name: {{ .Release.Name }}-daily-scan
 spec:
   schedule: {{ .Values.dailyScan.schedule | quote }}
+  {{- with .Values.dailyScan.timeZone }}
+  timeZone: {{ . | quote }}
+  {{- end }}
+  startingDeadlineSeconds: {{ .Values.dailyScan.startingDeadlineSeconds }}
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
@@ -27,5 +31,5 @@ spec:
                     -H 'content-type: application/json' \
                     -X POST \
                     --data '{{ dict "tickers" .Values.dailyScan.tickers "save" true | toJson }}' \
-                    http://{{ .Release.Name }}:{{ .Values.service.port }}/api/scan
+                    http://{{ .Release.Name }}:{{ .Values.service.port }}/api/daily-scan
 {{- end }}

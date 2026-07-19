@@ -21,7 +21,7 @@
   <p class="warn">Experimental statistical ranking only - not proof of market-maker buying and not financial advice.</p>
   <section class="section">
     <h2>Score Growth Watch</h2>
-    <p class="muted">Tickers saved in recent daily scans that moved from around 50 to around 70.</p>
+    <p class="muted">Tickers from saved dated scans where both score and confidence improved over time.</p>
     <div id="trendStatus"></div>
     <table>
       <thead>
@@ -30,7 +30,8 @@
           <th>Industry</th>
           <th>Start</th>
           <th>Latest</th>
-          <th>Change</th>
+          <th>Score Change</th>
+          <th>Confidence Change</th>
           <th>Latest Price</th>
           <th>Signal</th>
         </tr>
@@ -81,14 +82,14 @@
       const status = document.getElementById('trendStatus');
       status.textContent = 'Loading saved score growth...';
       try {
-        const r = await fetch('/api/trends?start_score=50&target_score=70&tolerance=8&max_days=7');
+        const r = await fetch('/api/trends?min_score_change=0&min_confidence_change=0&max_days=30');
         const d = await readJsonResponse(r);
         const rows = d.candidates || [];
         status.textContent = rows.length
-          ? `${rows.length} ticker(s) moved from roughly 50 to roughly 70 in the saved history.`
-          : 'No saved tickers match this pattern yet.';
+          ? `${rows.length} ticker(s) improved both score and confidence in the saved history.`
+          : 'No saved tickers have improved both score and confidence yet.';
         document.getElementById('trendRows').innerHTML = rows.map(x =>
-          `<tr><td>${fmt(x.ticker)}</td><td>${fmt(x.industry)}</td><td>${fmt(x.start_date)} (${fmt(x.start_score)})</td><td>${fmt(x.latest_date)} (${fmt(x.latest_score)})</td><td>${fmt(x.score_change)}</td><td>${fmt(x.latest_price)}</td><td>${fmt(x.suggested_signal)}</td></tr>`
+          `<tr><td>${fmt(x.ticker)}</td><td>${fmt(x.industry)}</td><td>${fmt(x.start_date)} (${fmt(x.start_score)} / ${fmt(x.start_confidence)}%)</td><td>${fmt(x.latest_date)} (${fmt(x.latest_score)} / ${fmt(x.latest_confidence)}%)</td><td>${fmt(x.score_change)}</td><td>${fmt(x.confidence_change)}%</td><td>${fmt(x.latest_price)}</td><td>${fmt(x.suggested_signal)}</td></tr>`
         ).join('');
       } catch (error) {
         status.textContent = `Could not load saved score growth: ${error.message}`;

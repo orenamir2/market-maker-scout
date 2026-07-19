@@ -100,23 +100,39 @@ def test_scan_history_saves_and_merges_by_day(tmp_path, monkeypatch):
     scores = {result["ticker"]: result["score"] for result in history[0]["results"]}
     assert scores == {"AAA": 54.8, "BBB": 72.4}
 
-def test_find_score_growth_candidates_uses_approximate_bands(tmp_path, monkeypatch):
+def test_find_score_growth_candidates_requires_score_and_confidence_growth(tmp_path, monkeypatch):
     monkeypatch.setenv("SCAN_HISTORY_DIR", str(tmp_path))
-    start = replace(score_ticker("AAA"), score=52.0)
-    latest = replace(score_ticker("AAA"), score=69.5)
-    flat = replace(score_ticker("BBB"), score=50.5)
+    start = replace(score_ticker("AAA"), score=52.0, confidence=12.0)
+    latest = replace(score_ticker("AAA"), score=69.5, confidence=44.0)
+    confidence_faded_start = replace(score_ticker("BBB"), score=50.5, confidence=30.0)
+    confidence_faded_latest = replace(score_ticker("BBB"), score=64.0, confidence=25.0)
 
-    save_daily_scan([start, flat], mode="demo", day="2026-07-13")
-    save_daily_scan([latest, flat], mode="demo", day="2026-07-16")
+    save_daily_scan([start, confidence_faded_start], mode="demo", day="2026-07-13")
+    save_daily_scan([latest, confidence_faded_latest], mode="demo", day="2026-07-16")
 
     candidates = find_score_growth_candidates(
-        start_score=50,
-        target_score=70,
-        tolerance=8,
-        max_days=7,
+        min_score_change=0,
+        min_confidence_change=0,
+        max_days=30,
     )
     assert [candidate["ticker"] for candidate in candidates] == ["AAA"]
     assert candidates[0]["score_change"] == 17.5
+    assert candidates[0]["confidence_change"] == 32.0
+
+def test_daily_scan_skips_when_today_already_saved(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATA_MODE", "demo")
+    monkeypatch.setenv("SCAN_HISTORY_DIR", str(tmp_path))
+    monkeypatch.setenv("SCAN_TIMEZONE", "UTC")
+
+    client = TestClient(app)
+    first = client.post("/api/daily-scan", json={"tickers": ["AAPL"]})
+    second = client.post("/api/daily-scan", json={"tickers": ["AAPL"]})
+
+    assert first.status_code == 200
+    assert first.json()["skipped"] is False
+    assert second.status_code == 200
+    assert second.json()["skipped"] is True
+    assert second.json()["scan_date"] == first.json()["scan_date"]
 
 def test_fetch_industry_uses_search_exact_symbol_match(monkeypatch):
     fetch_industry.cache_clear()

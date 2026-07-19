@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import List
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 import numpy as np
@@ -47,10 +48,9 @@ class ScanRequest(BaseModel):
 
 
 class TrendRequest(BaseModel):
-    start_score: float = Field(default=50, ge=0, le=100)
-    target_score: float = Field(default=70, ge=0, le=100)
-    tolerance: float = Field(default=8, ge=0, le=25)
-    max_days: int = Field(default=7, ge=2, le=60)
+    min_score_change: float = Field(default=0, ge=0, le=100)
+    min_confidence_change: float = Field(default=0, ge=0, le=100)
+    max_days: int = Field(default=30, ge=2, le=365)
 
 
 @dataclass
@@ -117,8 +117,16 @@ def scan_history_dir() -> Path:
     return Path(os.getenv("SCAN_HISTORY_DIR", DEFAULT_HISTORY_DIR))
 
 
+def scan_timezone() -> timezone | ZoneInfo:
+    configured = os.getenv("SCAN_TIMEZONE", "UTC")
+    try:
+        return ZoneInfo(configured)
+    except ZoneInfoNotFoundError:
+        return timezone.utc
+
+
 def scan_date() -> str:
-    return datetime.now(timezone.utc).date().isoformat()
+    return datetime.now(scan_timezone()).date().isoformat()
 
 
 def env_int(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -152,6 +160,10 @@ def load_daily_scan(day: str) -> dict:
         return {"date": day, "results": []}
     with path.open(encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def has_daily_scan(day: str) -> bool:
+    return bool(load_daily_scan(day).get("results"))
 
 
 def save_daily_scan(results: list[ScoreResult], mode: str, day: str | None = None) -> None:
@@ -198,10 +210,9 @@ def load_scan_history(max_days: int = 60) -> list[dict]:
 
 
 def find_score_growth_candidates(
-    start_score: float = 50,
-    target_score: float = 70,
-    tolerance: float = 8,
-    max_days: int = 7,
+    min_score_change: float = 0,
+    min_confidence_change: float = 0,
+    max_days: int = 30,
 ) -> list[dict]:
     histories: dict[str, list[dict]] = {}
     for daily_scan in load_scan_history(max_days=max_days):
@@ -209,12 +220,14 @@ def find_score_growth_candidates(
         for result in daily_scan.get("results", []):
             ticker = result.get("ticker")
             score = result.get("score")
-            if not ticker or score is None:
+            confidence = result.get("confidence")
+            if not ticker or score is None or confidence is None:
                 continue
             histories.setdefault(str(ticker), []).append(
                 {
                     "date": day,
                     "score": float(score),
+                    "confidence": float(confidence),
                     "industry": result.get("industry", "Unknown"),
                     "latest_price": result.get("latest_price"),
                     "latest_at": result.get("latest_at"),
@@ -229,18 +242,21 @@ def find_score_growth_candidates(
             continue
         first = points[0]
         last = points[-1]
-        first_is_near_start = abs(first["score"] - start_score) <= tolerance
-        last_is_near_target = abs(last["score"] - target_score) <= tolerance
-        if first_is_near_start and last_is_near_target and last["score"] > first["score"]:
+        score_change = last["score"] - first["score"]
+        confidence_change = last["confidence"] - first["confidence"]
+        if score_change > 0 and confidence_change > 0 and score_change >= min_score_change and confidence_change >= min_confidence_change:
             candidates.append(
                 {
                     "ticker": ticker,
                     "industry": last["industry"],
                     "start_date": first["date"],
                     "start_score": round(first["score"], 1),
+                    "start_confidence": round(first["confidence"], 1),
                     "latest_date": last["date"],
                     "latest_score": round(last["score"], 1),
-                    "score_change": round(last["score"] - first["score"], 1),
+                    "latest_confidence": round(last["confidence"], 1),
+                    "score_change": round(score_change, 1),
+                    "confidence_change": round(confidence_change, 1),
                     "latest_price": last["latest_price"],
                     "latest_at": last["latest_at"],
                     "suggested_signal": last["suggested_signal"],
@@ -248,7 +264,11 @@ def find_score_growth_candidates(
                 }
             )
 
-    return sorted(candidates, key=lambda item: item["score_change"], reverse=True)
+    return sorted(
+        candidates,
+        key=lambda item: (item["score_change"], item["confidence_change"]),
+        reverse=True,
+    )
 
 
 @lru_cache(maxsize=512)
@@ -504,8 +524,13 @@ def healthz() -> dict[str, str]:
 
 @app.post("/api/scan")
 def scan(request: ScanRequest) -> dict:
+    return run_scan(request)
+
+
+def run_scan(request: ScanRequest, day: str | None = None) -> dict:
     if len(request.tickers) > 250:
         raise HTTPException(status_code=400, detail="Maximum 250 tickers")
+    day = day or scan_date()
     mode = os.getenv("DATA_MODE", "live").lower()
     results = []
     errors = []
@@ -527,7 +552,7 @@ def scan(request: ScanRequest) -> dict:
 
     results = sorted(results, key=lambda x: x.score, reverse=True)
     if request.save:
-        save_daily_scan(results, mode)
+        save_daily_scan(results, mode, day=day)
     warning = (
         "Research ranking only. Live values use the latest available provider bars and may be delayed; "
         "not proof of market-maker buying and not financial advice."
@@ -542,27 +567,43 @@ def scan(request: ScanRequest) -> dict:
         "requested": len(request.tickers),
         "workers": worker_count,
         "saved": request.save,
-        "scan_date": scan_date(),
+        "scan_date": day,
         "results": [asdict(r) for r in results],
     }
 
 
+@app.post("/api/daily-scan")
+def daily_scan(request: ScanRequest) -> dict:
+    day = scan_date()
+    if has_daily_scan(day):
+        return {
+            "scan_date": day,
+            "saved": True,
+            "skipped": True,
+            "message": f"Saved scan already exists for {day}.",
+            "results": load_daily_scan(day).get("results", []),
+        }
+
+    request.save = True
+    payload = run_scan(request, day=day)
+    payload["skipped"] = False
+    return payload
+
+
 @app.get("/api/history")
 def history(max_days: int = 14) -> dict:
-    return {"history": load_scan_history(max_days=max(1, min(max_days, 60)))}
+    return {"history": load_scan_history(max_days=max(1, min(max_days, 365)))}
 
 
 @app.get("/api/trends")
 def trends(
-    start_score: float = 50,
-    target_score: float = 70,
-    tolerance: float = 8,
-    max_days: int = 7,
+    min_score_change: float = 0,
+    min_confidence_change: float = 0,
+    max_days: int = 30,
 ) -> dict:
     trend_request = TrendRequest(
-        start_score=start_score,
-        target_score=target_score,
-        tolerance=tolerance,
+        min_score_change=min_score_change,
+        min_confidence_change=min_confidence_change,
         max_days=max_days,
     )
     return {
