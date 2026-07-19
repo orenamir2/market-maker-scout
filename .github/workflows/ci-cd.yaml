@@ -48,6 +48,8 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
+          platforms: linux/amd64
+          provenance: false
           push: ${{ github.event_name != 'pull_request' }}
           tags: |
             ${{ env.IMAGE_REPOSITORY }}:${{ env.IMAGE_TAG }}
@@ -111,6 +113,7 @@ jobs:
             --docker-password="$GHCR_TOKEN" \
             --dry-run=client -o yaml | kubectl apply -f -
       - name: Deploy and advise on failure
+        timeout-minutes: 8
         env:
           IMAGE_REPOSITORY: ${{ needs.build-publish.outputs.image-repository }}
           IMAGE_TAG: ${{ needs.build-publish.outputs.image-tag }}
