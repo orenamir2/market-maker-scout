@@ -81,16 +81,14 @@ jobs:
       KUBE_CONFIG_B64: ${{ secrets.KUBE_CONFIG }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: {python-version: '3.12'}
-      - uses: actions/setup-node@v4
-        with: {node-version: '22'}
-      - name: Install Helm
-        uses: azure/setup-helm@v4
-      - name: Install kubectl
-        uses: azure/setup-kubectl@v4
-      - name: Install Codex CLI
-        run: command -v codex >/dev/null || npm install -g @openai/codex || true
+      - name: Verify Python
+        run: python3 --version || python --version
+      - name: Verify Helm
+        run: helm version
+      - name: Verify kubectl
+        run: kubectl version --client=true
+      - name: Verify Codex CLI
+        run: codex --version
       - name: Configure kubeconfig
         if: ${{ env.KUBE_CONFIG_B64 != '' }}
         run: |
