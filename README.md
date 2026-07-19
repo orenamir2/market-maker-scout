@@ -30,6 +30,53 @@ helm upgrade --install market-maker-scout helm/market-maker-scout \
   --set image.tag=dev
 ```
 
+## Published versions
+The CI workflow publishes both artifacts to GitHub Container Registry (GHCR)
+with the same version:
+
+- Docker image: `ghcr.io/<owner>/market-maker-scout:<version>`
+- Helm chart: `oci://ghcr.io/<owner>/charts/market-maker-scout --version <version>`
+
+For pushes to `main`, the version is based on the chart version and workflow
+run number, for example `0.1.0-main.42`. For Git tags like `v1.2.3`, the
+published version is `1.2.3`.
+
+To see versions in GitHub, open the repository page, choose **Packages**, then
+open the `market-maker-scout` container package for Docker images or the
+`charts/market-maker-scout` container package for Helm charts.
+
+With the GitHub CLI:
+
+```bash
+OWNER=<github-user-or-org>
+REPO=market-maker-scout
+
+# Docker image tags
+gh api "/users/$OWNER/packages/container/$REPO/versions" \
+  --jq '.[] | .metadata.container.tags[]?'
+
+# Helm chart versions
+gh api "/users/$OWNER/packages/container/charts%2F$REPO/versions" \
+  --jq '.[] | .metadata.container.tags[]?'
+```
+
+If the package is owned by a GitHub organization, replace `/users/$OWNER` with
+`/orgs/$OWNER`.
+
+Install a matching image and chart by using the same version in both places:
+
+```bash
+OWNER=<github-user-or-org>
+VERSION=0.1.0-main.42
+
+helm upgrade --install market-maker-scout \
+  "oci://ghcr.io/$OWNER/charts/market-maker-scout" \
+  --version "$VERSION" \
+  --namespace market-maker-scout --create-namespace \
+  --set image.repository="ghcr.io/$OWNER/market-maker-scout" \
+  --set image.tag="$VERSION"
+```
+
 Daily scans are designed for a local cluster that may be asleep when the exact
 CronJob time passes. The Helm CronJob calls `/api/daily-scan` on a regular
 schedule, and the app only runs the scan when no dated scan exists for the

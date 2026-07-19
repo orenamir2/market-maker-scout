@@ -1,7 +1,7 @@
 replicaCount: 1
 image:
   repository: ghcr.io/OWNER/market-maker-scout
-  tag: latest
+  tag: ""
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 service:
