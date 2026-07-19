@@ -11,14 +11,25 @@
     button:disabled{opacity:.6}
     table{border-collapse:collapse;width:100%}
     th,td{padding:8px;border-bottom:1px solid #ddd;text-align:left}
+    a{color:#0b57d0}
+    a:hover{text-decoration:none}
     .warn{background:#fff4cc;padding:12px}
     .section{margin-top:28px}
     .muted{color:#666}
+    .date-list{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+    .date-list a{border:1px solid #ddd;border-radius:6px;padding:6px 10px;text-decoration:none}
+    .date-list a:hover,.date-list a.active{border-color:#0b57d0;background:#eef4ff}
   </style>
 </head>
 <body>
   <h1>Market Maker Scout</h1>
   <p class="warn">Experimental statistical ranking only - not proof of market-maker buying and not financial advice.</p>
+  <section class="section">
+    <h2>Saved Scans</h2>
+    <p class="muted">Open any saved scan date to view its full scan output below.</p>
+    <div id="historyStatus"></div>
+    <div id="historyDates" class="date-list"></div>
+  </section>
   <section class="section">
     <h2>Score Growth Watch</h2>
     <p class="muted">Tickers from saved dated scans where both score and confidence improved over time.</p>
@@ -77,6 +88,70 @@
   </section>
   <script>
     const fmt = value => value == null ? '' : String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const scanDateParam = () => new URLSearchParams(window.location.search).get('scan_date');
+
+    function renderResults(results) {
+      document.getElementById('rows').innerHTML = (results || []).map(x =>
+        `<tr><td>${fmt(x.ticker)}</td><td>${fmt(x.industry)}</td><td>${fmt(x.latest_price)}</td><td>${fmt(x.latest_volume)}</td><td>${fmt(x.latest_at)}</td><td>${fmt(x.data_source)}</td><td>${fmt(x.score)}</td><td>${fmt(x.confidence)}%</td><td>${fmt(x.suggested_signal)}</td><td>${fmt(x.suggested_horizon)}</td><td>${fmt(x.volume_z)}</td><td>${fmt(x.volume_acceleration)}</td><td>${fmt(x.relative_strength)}%</td><td>${fmt(x.momentum_z)}</td><td>${fmt(x.return_t_stat)}</td><td>${fmt(x.up_down_volume_ratio)}</td><td>${fmt(x.volatility_compression)}</td><td>${fmt(x.drawdown_resilience)}%</td><td>${fmt(x.explanation)}</td></tr>`
+      ).join('');
+    }
+
+    async function loadSavedScan(day, updateUrl = true) {
+      const status = document.getElementById('status');
+      status.textContent = `Loading saved scan for ${day}...`;
+      const r = await fetch(`/api/history/${encodeURIComponent(day)}`);
+      const d = await readJsonResponse(r);
+      renderResults(d.results || []);
+      status.textContent = `Loaded saved scan for ${d.date || day}: ${(d.results || []).length} ticker(s).`;
+      if (updateUrl) {
+        const url = new URL(window.location.href);
+        url.searchParams.set('scan_date', day);
+        history.pushState({scan_date: day}, '', url);
+      }
+      highlightActiveDate(day);
+    }
+
+    function highlightActiveDate(day) {
+      document.querySelectorAll('#historyDates a').forEach(link => {
+        link.classList.toggle('active', link.dataset.day === day);
+      });
+    }
+
+    async function loadHistoryDates(loadSelected = true) {
+      const status = document.getElementById('historyStatus');
+      status.textContent = 'Loading saved scan dates...';
+      try {
+        const r = await fetch('/api/history?max_days=365');
+        const d = await readJsonResponse(r);
+        const historyRows = d.history || [];
+        const selectedDay = scanDateParam();
+        status.textContent = historyRows.length
+          ? `${historyRows.length} saved scan date(s).`
+          : 'No saved scans yet.';
+        document.getElementById('historyDates').innerHTML = historyRows.map(scan => {
+          const day = fmt(scan.date);
+          const count = (scan.results || []).length;
+          return `<a href="/?scan_date=${encodeURIComponent(scan.date)}" data-day="${day}">${day} (${count})</a>`;
+        }).join('');
+        document.querySelectorAll('#historyDates a').forEach(link => {
+          link.addEventListener('click', async event => {
+            event.preventDefault();
+            try {
+              await loadSavedScan(link.dataset.day);
+            } catch (error) {
+              document.getElementById('status').textContent = `Could not load saved scan: ${error.message}`;
+            }
+          });
+        });
+        if (selectedDay && loadSelected) {
+          await loadSavedScan(selectedDay, false);
+        } else if (selectedDay) {
+          highlightActiveDate(selectedDay);
+        }
+      } catch (error) {
+        status.textContent = `Could not load saved scan dates: ${error.message}`;
+      }
+    }
 
     async function loadTrends() {
       const status = document.getElementById('trendStatus');
@@ -131,9 +206,13 @@
         const skipped = (d.errors || []).length ? ` Skipped ${d.errors.length} ticker(s) with unavailable data.` : '';
         const saved = d.saved ? ` Saved under ${d.scan_date}.` : '';
         status.textContent = `Scanned ${d.scanned || 0} of ${d.requested || tickers.length} ticker(s) using ${d.workers || 1} worker(s). ${d.warning || ''}${skipped}${saved}`;
-        document.getElementById('rows').innerHTML = (d.results || []).map(x =>
-          `<tr><td>${fmt(x.ticker)}</td><td>${fmt(x.industry)}</td><td>${fmt(x.latest_price)}</td><td>${fmt(x.latest_volume)}</td><td>${fmt(x.latest_at)}</td><td>${fmt(x.data_source)}</td><td>${fmt(x.score)}</td><td>${fmt(x.confidence)}%</td><td>${fmt(x.suggested_signal)}</td><td>${fmt(x.suggested_horizon)}</td><td>${fmt(x.volume_z)}</td><td>${fmt(x.volume_acceleration)}</td><td>${fmt(x.relative_strength)}%</td><td>${fmt(x.momentum_z)}</td><td>${fmt(x.return_t_stat)}</td><td>${fmt(x.up_down_volume_ratio)}</td><td>${fmt(x.volatility_compression)}</td><td>${fmt(x.drawdown_resilience)}%</td><td>${fmt(x.explanation)}</td></tr>`
-        ).join('');
+        renderResults(d.results || []);
+        if (d.saved && d.scan_date) {
+          const url = new URL(window.location.href);
+          url.searchParams.set('scan_date', d.scan_date);
+          history.pushState({scan_date: d.scan_date}, '', url);
+        }
+        await loadHistoryDates(false);
         await loadTrends();
       } catch (error) {
         status.textContent = error.name === 'AbortError'
@@ -144,6 +223,17 @@
         button.disabled = false;
       }
     }
+    window.addEventListener('popstate', async () => {
+      const day = scanDateParam();
+      if (day) {
+        try {
+          await loadSavedScan(day, false);
+        } catch (error) {
+          document.getElementById('status').textContent = `Could not load saved scan: ${error.message}`;
+        }
+      }
+    });
+    loadHistoryDates();
     loadTrends();
   </script>
 </body>

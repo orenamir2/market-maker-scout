@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -30,6 +31,7 @@ DEFAULT_SCAN_WORKERS = 24
 MAX_SCAN_WORKERS = 64
 DEFAULT_MARKET_DATA_TIMEOUT_SECONDS = 6.0
 DEFAULT_INDUSTRY_TIMEOUT_SECONDS = 3.0
+SCAN_DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 class ScanRequest(BaseModel):
@@ -593,6 +595,16 @@ def daily_scan(request: ScanRequest) -> dict:
 @app.get("/api/history")
 def history(max_days: int = 14) -> dict:
     return {"history": load_scan_history(max_days=max(1, min(max_days, 365)))}
+
+
+@app.get("/api/history/{day}")
+def history_day(day: str) -> dict:
+    if not SCAN_DAY_RE.match(day):
+        raise HTTPException(status_code=400, detail="Scan date must use YYYY-MM-DD")
+    payload = load_daily_scan(day)
+    if not payload.get("results"):
+        raise HTTPException(status_code=404, detail=f"No saved scan found for {day}")
+    return payload
 
 
 @app.get("/api/trends")

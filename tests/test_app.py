@@ -100,6 +100,27 @@ def test_scan_history_saves_and_merges_by_day(tmp_path, monkeypatch):
     scores = {result["ticker"]: result["score"] for result in history[0]["results"]}
     assert scores == {"AAA": 54.8, "BBB": 72.4}
 
+def test_history_day_api_returns_saved_scan(tmp_path, monkeypatch):
+    monkeypatch.setenv("SCAN_HISTORY_DIR", str(tmp_path))
+    result = replace(score_ticker("AAA"), score=51.2)
+    save_daily_scan([result], mode="demo", day="2026-07-15")
+
+    client = TestClient(app)
+    response = client.get("/api/history/2026-07-15")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["date"] == "2026-07-15"
+    assert payload["results"][0]["ticker"] == "AAA"
+
+def test_history_day_api_rejects_invalid_dates(tmp_path, monkeypatch):
+    monkeypatch.setenv("SCAN_HISTORY_DIR", str(tmp_path))
+
+    client = TestClient(app)
+
+    assert client.get("/api/history/not-a-date").status_code == 400
+    assert client.get("/api/history/2026-07-15").status_code == 404
+
 def test_find_score_growth_candidates_requires_score_and_confidence_growth(tmp_path, monkeypatch):
     monkeypatch.setenv("SCAN_HISTORY_DIR", str(tmp_path))
     start = replace(score_ticker("AAA"), score=52.0, confidence=12.0)
@@ -181,3 +202,10 @@ def test_starting_universe_has_250_smaller_companies():
     assert len(default_tickers) == len(set(default_tickers))
     assert "AAPL" not in default_tickers
     assert "MSFT" not in default_tickers
+
+def test_main_page_links_saved_scan_dates():
+    html = open("app/static/index.html", encoding="utf-8").read()
+    assert "Saved Scans" in html
+    assert "/api/history?max_days=365" in html
+    assert "/?scan_date=" in html
+    assert "/api/history/${encodeURIComponent(day)}" in html
