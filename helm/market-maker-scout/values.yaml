@@ -12,8 +12,8 @@ ingress:
   className: nginx
   host: scout.local
   annotations:
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "900"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "900"
 resources:
   requests: {cpu: 100m, memory: 128Mi}
   limits: {cpu: 500m, memory: 512Mi}
@@ -23,6 +23,7 @@ env:
   SCAN_WORKERS: "24"
   MARKET_DATA_TIMEOUT_SECONDS: "6"
   INDUSTRY_TIMEOUT_SECONDS: "3"
+  DEFAULT_UNIVERSE_TIMEOUT_SECONDS: "20"
   SCAN_TIMEZONE: Asia/Jerusalem
 persistence:
   enabled: true

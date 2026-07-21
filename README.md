@@ -1,6 +1,6 @@
 # Market Maker Scout
 
-Kubernetes-first experimental web application that ranks up to 250 tickers using statistical proxies for accumulation. It does **not** observe or prove market-maker activity and must not be treated as financial advice.
+Kubernetes-first experimental web application that ranks up to 750 tickers using statistical proxies for accumulation. It does **not** observe or prove market-maker activity and must not be treated as financial advice.
 
 ## Architecture
 - FastAPI backend and simple browser UI
@@ -18,7 +18,7 @@ uvicorn app.main:app --reload
 ```
 Open http://localhost:8000.
 
-By default each scan fetches the latest available daily bars from the configured provider. Set `DATA_MODE=demo` to use deterministic synthetic data for offline development and tests. Provider bars may be delayed; use a licensed feed for production-grade real-time guarantees.
+By default each scan fetches the latest available daily bars from the configured provider. If no custom tickers are supplied, the scanner builds a 750-symbol default universe from Nasdaq screener rows with market cap between `$500M` and `$2B`, sorted by market cap descending. Set `DATA_MODE=demo` to use deterministic synthetic data for offline development and tests. Provider bars may be delayed; use a licensed feed for production-grade real-time guarantees.
 
 ## Kubernetes
 ```bash
@@ -83,6 +83,10 @@ schedule, and the app only runs the scan when no dated scan exists for the
 current `SCAN_TIMEZONE` day. This catches the next available window without
 duplicating saved scans for the same date.
 
+When `dailyScan.tickers` is left empty, the CronJob scans the default 750-symbol
+`$500M`-`$2B` universe. Set `dailyScan.tickers` only when you want to override
+that default with a custom list.
+
 ## Required GitHub secrets
 - `KUBE_CONFIG`: base64-encoded kubeconfig with least-privilege access
 - `SLACK_WEBHOOK_URL`: Slack incoming webhook
@@ -93,7 +97,7 @@ duplicating saved scans for the same date.
 
 ## Production roadmap
 1. Replace prototype Yahoo Finance chart fetches with a licensed data provider supporting intraday trades/quotes and volume with explicit latency guarantees.
-2. Store observations in PostgreSQL/TimescaleDB; add Redis and Celery/Arq workers for 250-symbol scans.
+2. Store observations in PostgreSQL/TimescaleDB; add Redis and Celery/Arq workers for 750-symbol scans.
 3. Add features: abnormal volume, VWAP behavior, OBV/CMF, block-trade proxy, spread/liquidity changes, relative strength, regime adjustment.
 4. Backtest with walk-forward validation; calibrate confidence using out-of-sample precision, not distance from a heuristic score.
 5. Add authentication, rate limits, audit logs, Prometheus metrics, alerts, NetworkPolicy and External Secrets.

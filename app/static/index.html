@@ -52,9 +52,10 @@
   </section>
   <section class="section">
   <h2>Run Scan</h2>
-  <textarea id="tickers">CPF,GDRX,FAC,LUCK,CCNE,EEX,FUBO,PLOW,SG,GSBD,BVS,PSUS,SCHL,GRPN,EQBK,GO,LXRX,BFST,MBWM,NNE,AMTB,ARRY,TROX,PHAR,WSR,KFRC,ABR,HSLV,KDK,INMD,ODD,COUR,BCX,MFA,QNST,GERN,DAKT,NAK,ASA,HAFC,TK,RDVT,TRST,AVR,ANNX,DSGN,ABUS,LBRX,GOOS,NBBK,ESRT,CSR,FTH,ANRO,BLDP,BKSY,GLAS,WRLD,CRCT,EIG,FTK,REPL,BBSI,BUR,KOP,KBDC,NXDR,CAC,AEBI,GILT,ARKO,LMB,GLIBA,FBRX,UMAC,IVA,TBN,BBDC,PMT,HIVE,GLIBK,THFF,NPK,ACDC,LYTS,BFS,HPK,RJET,EVER,MPB,TALK,RPC,MITK,TBPH,BZH,HMH,DSP,ADSE,GTM,MOV,BH,TDUP,HRTG,CCBG,DGICB,FMNB,GSBC,ALOY,EVEX,MTAL,AHG,GMRS,BCSF,SMP,MAX,MATW,KELYB,WGO,WOOF,ADAM,TRNS,AMPH,HPP,HTB,HSTM,CCU,SMBC,METC,ESPR,MNTN,PGC,CTMX,EGBN,HCMA,CYRX,MFIC,SPFI,APOG,OPFI,KODK,CLYM,ODTX,INR,NX,NABL,PD,PSIX,SMBK,DJCO,MTUS,ORRF,OCS,ZVRA,SPRY,RIGL,ALRS,LXU,SDHC,MAMA,ACRS,SIBN,IMMX,NAVI,VTEX,OFRM,HNRG,FWRG,FDUS,FISI,DRUG,OIO,RSKD,BBNX,SSII,NGVC,NGNE,SHBI,FPH,ONT,HZO,CODI,SKYH,GDOT,SGP,HIPO,NEWP,RPD,HOV,ANGX,OMER,ODV,AGNT,AIAI,CBLL,IBCP,CGBD,LPTH,IVR,SSYS,HYLN,IRWD,KRNT,SABR,GYRE,WEST,CARE,SWIM,EFOR,RGNX,CSTL,CTO,REPX,IBTA,SOC,HSHP,MNPR,BLMN,KOPN,FOXF,PFLT,JBI,SLRC,AURA,SB,PRAA,SHEN,PKE,VBNK,INN,DGICA,GFR,BMM,SWBI,SXC,PAR,NXRT,CADL,MEC,ALLO,CCSI,TIPT,TMS,WASH,PRME,KRT,BWMX,VEL,KRO,MAKO,WHK</textarea>
+  <textarea id="tickers" placeholder="Loading default universe..."></textarea>
   <br>
   <button id="scanButton" onclick="scan()">Scan</button>
+  <div id="defaultUniverseStatus" class="muted"></div>
   <div id="status"></div>
   </section>
   <section class="section">
@@ -89,6 +90,20 @@
   <script>
     const fmt = value => value == null ? '' : String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const scanDateParam = () => new URLSearchParams(window.location.search).get('scan_date');
+
+    async function loadDefaultUniverse() {
+      const status = document.getElementById('defaultUniverseStatus');
+      const textarea = document.getElementById('tickers');
+      status.textContent = 'Loading default scan universe...';
+      try {
+        const r = await fetch('/api/default-universe');
+        const d = await readJsonResponse(r);
+        textarea.value = (d.tickers || []).join(',');
+        status.textContent = `Default universe: ${d.count || 0} ticker(s) with market cap $${fmt(d.market_cap_min).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}-$${fmt(d.market_cap_max).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}.`;
+      } catch (error) {
+        status.textContent = `Could not load default universe: ${error.message}`;
+      }
+    }
 
     function renderResults(results) {
       document.getElementById('rows').innerHTML = (results || []).map(x =>
@@ -192,7 +207,7 @@
       const status = document.getElementById('status');
       const button = document.getElementById('scanButton');
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 300000);
+      const timeout = setTimeout(() => controller.abort(), 900000);
       status.textContent = `Scanning ${tickers.length} ticker(s)...`;
       button.disabled = true;
       try {
@@ -216,7 +231,7 @@
         await loadTrends();
       } catch (error) {
         status.textContent = error.name === 'AbortError'
-          ? 'Scan timed out after 5 minutes. Try fewer tickers or increase Kubernetes/ingress timeouts.'
+          ? 'Scan timed out after 15 minutes. Try fewer tickers or increase Kubernetes/ingress timeouts.'
           : `Scan failed: ${error.message}`;
       } finally {
         clearTimeout(timeout);
@@ -233,6 +248,7 @@
         }
       }
     });
+    loadDefaultUniverse();
     loadHistoryDates();
     loadTrends();
   </script>

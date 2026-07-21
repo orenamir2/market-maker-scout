@@ -30,6 +30,8 @@ spec:
               value: {{ .Values.env.MARKET_DATA_TIMEOUT_SECONDS | quote }}
             - name: INDUSTRY_TIMEOUT_SECONDS
               value: {{ .Values.env.INDUSTRY_TIMEOUT_SECONDS | quote }}
+            - name: DEFAULT_UNIVERSE_TIMEOUT_SECONDS
+              value: {{ .Values.env.DEFAULT_UNIVERSE_TIMEOUT_SECONDS | quote }}
             - name: SCAN_TIMEZONE
               value: {{ .Values.env.SCAN_TIMEZONE | quote }}
           volumeMounts:

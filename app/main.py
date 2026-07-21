@@ -26,26 +26,47 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
 YAHOO_PROFILE_URL = "https://query2.finance.yahoo.com/v10/finance/quoteSummary/{ticker}"
 YAHOO_SEARCH_URL = "https://query2.finance.yahoo.com/v1/finance/search"
+NASDAQ_SCREENER_URL = "https://api.nasdaq.com/api/screener/stocks"
 DEFAULT_HISTORY_DIR = "data/scan-history"
 DEFAULT_SCAN_WORKERS = 24
 MAX_SCAN_WORKERS = 64
+DEFAULT_SCAN_LIMIT = 750
+MAX_SCAN_TICKERS = 750
+DEFAULT_MARKET_CAP_MIN = 500_000_000
+DEFAULT_MARKET_CAP_MAX = 2_000_000_000
 DEFAULT_MARKET_DATA_TIMEOUT_SECONDS = 6.0
 DEFAULT_INDUSTRY_TIMEOUT_SECONDS = 3.0
+DEFAULT_UNIVERSE_TIMEOUT_SECONDS = 20.0
 SCAN_DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+PLAIN_TICKER_RE = re.compile(r"^[A-Z][A-Z0-9]{0,4}$")
+DEFAULT_UNIVERSE_EXCLUDED_NAME_PARTS = (
+    "warrant",
+    " right",
+    " unit",
+    "preferred",
+    "depositary share",
+    "note due",
+    "notes due",
+    " etf",
+    " etn",
+    "index fund",
+)
 
 
 class ScanRequest(BaseModel):
-    tickers: List[str] = Field(min_length=1, max_length=250)
+    tickers: List[str] | None = Field(default=None, max_length=MAX_SCAN_TICKERS)
     save: bool = True
 
     @field_validator("tickers")
     @classmethod
-    def normalize_tickers(cls, values: List[str]) -> List[str]:
+    def normalize_tickers(cls, values: List[str] | None) -> List[str] | None:
+        if values is None:
+            return None
         cleaned = [v.strip().upper() for v in values if v.strip()]
         if len(cleaned) != len(set(cleaned)):
             cleaned = list(dict.fromkeys(cleaned))
         if not cleaned:
-            raise ValueError("At least one ticker is required")
+            raise ValueError("At least one ticker is required when tickers are provided")
         return cleaned
 
 
@@ -150,6 +171,83 @@ def env_float(name: str, default: float, minimum: float, maximum: float) -> floa
 def scan_workers(ticker_count: int) -> int:
     configured = env_int("SCAN_WORKERS", DEFAULT_SCAN_WORKERS, 1, MAX_SCAN_WORKERS)
     return max(1, min(configured, ticker_count))
+
+
+def parse_market_cap(value: object) -> float | None:
+    try:
+        return float(str(value or "").replace("$", "").replace(",", ""))
+    except ValueError:
+        return None
+
+
+def default_universe_candidate(row: dict) -> tuple[str, float] | None:
+    symbol = str(row.get("symbol") or "").strip().upper()
+    name = str(row.get("name") or "").lower()
+    market_cap = parse_market_cap(row.get("marketCap"))
+    if market_cap is None:
+        return None
+    if not DEFAULT_MARKET_CAP_MIN <= market_cap <= DEFAULT_MARKET_CAP_MAX:
+        return None
+    if not PLAIN_TICKER_RE.match(symbol):
+        return None
+    if any(fragment in name for fragment in DEFAULT_UNIVERSE_EXCLUDED_NAME_PARTS):
+        return None
+    return symbol, market_cap
+
+
+def default_scan_tickers() -> list[str]:
+    return fetch_default_scan_tickers(scan_date())
+
+
+@lru_cache(maxsize=8)
+def fetch_default_scan_tickers(cache_date: str) -> list[str]:
+    """Fetch today's default mid-cap universe. cache_date refreshes the cache daily."""
+    response = httpx.get(
+        NASDAQ_SCREENER_URL,
+        params={
+            "tableonly": "true",
+            "limit": 10000,
+            "offset": 0,
+            "download": "true",
+        },
+        headers={
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "application/json,text/plain,*/*",
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+        timeout=env_float(
+            "DEFAULT_UNIVERSE_TIMEOUT_SECONDS",
+            DEFAULT_UNIVERSE_TIMEOUT_SECONDS,
+            5.0,
+            60.0,
+        ),
+    )
+    response.raise_for_status()
+    payload = response.json()
+    rows = payload.get("data", {}).get("rows") or []
+    candidates = [
+        candidate
+        for row in rows
+        if (candidate := default_universe_candidate(row)) is not None
+    ]
+    unique_candidates = {
+        symbol: market_cap
+        for symbol, market_cap in candidates
+    }
+    tickers = [
+        symbol
+        for symbol, _market_cap in sorted(
+            unique_candidates.items(),
+            key=lambda item: (item[1], item[0]),
+            reverse=True,
+        )[:DEFAULT_SCAN_LIMIT]
+    ]
+    if len(tickers) < DEFAULT_SCAN_LIMIT:
+        raise ValueError(
+            f"Only found {len(tickers)} eligible default tickers between "
+            f"${DEFAULT_MARKET_CAP_MIN:,} and ${DEFAULT_MARKET_CAP_MAX:,}"
+        )
+    return tickers
 
 
 def history_file(day: str) -> Path:
@@ -530,17 +628,26 @@ def scan(request: ScanRequest) -> dict:
 
 
 def run_scan(request: ScanRequest, day: str | None = None) -> dict:
-    if len(request.tickers) > 250:
-        raise HTTPException(status_code=400, detail="Maximum 250 tickers")
+    uses_default_universe = request.tickers is None
+    try:
+        tickers = request.tickers or default_scan_tickers()
+    except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not load default scan universe: {exc}",
+        ) from exc
+
+    if len(tickers) > MAX_SCAN_TICKERS:
+        raise HTTPException(status_code=400, detail=f"Maximum {MAX_SCAN_TICKERS} tickers")
     day = day or scan_date()
     mode = os.getenv("DATA_MODE", "live").lower()
     results = []
     errors = []
-    worker_count = scan_workers(len(request.tickers))
+    worker_count = scan_workers(len(tickers))
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         futures = {
             executor.submit(scan_one_ticker, ticker, mode): ticker
-            for ticker in request.tickers
+            for ticker in tickers
         }
         for future in as_completed(futures):
             ticker = futures[future]
@@ -566,11 +673,30 @@ def run_scan(request: ScanRequest, day: str | None = None) -> dict:
         "warning": warning,
         "errors": errors,
         "scanned": len(results),
-        "requested": len(request.tickers),
+        "requested": len(tickers),
         "workers": worker_count,
         "saved": request.save,
         "scan_date": day,
+        "universe": "default_500m_2b" if uses_default_universe else "custom",
         "results": [asdict(r) for r in results],
+    }
+
+
+@app.get("/api/default-universe")
+def default_universe() -> dict:
+    try:
+        tickers = default_scan_tickers()
+    except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not load default scan universe: {exc}",
+        ) from exc
+    return {
+        "source": NASDAQ_SCREENER_URL,
+        "count": len(tickers),
+        "market_cap_min": DEFAULT_MARKET_CAP_MIN,
+        "market_cap_max": DEFAULT_MARKET_CAP_MAX,
+        "tickers": tickers,
     }
 
 

@@ -5,10 +5,16 @@ import httpx
 from fastapi.testclient import TestClient
 
 from app.main import (
+    DEFAULT_MARKET_CAP_MAX,
+    DEFAULT_MARKET_CAP_MIN,
+    DEFAULT_SCAN_LIMIT,
     MarketSeries,
+    NASDAQ_SCREENER_URL,
     ScanRequest,
     app,
+    default_scan_tickers,
     fetch_industry,
+    fetch_default_scan_tickers,
     find_score_growth_candidates,
     load_scan_history,
     save_daily_scan,
@@ -84,6 +90,21 @@ def test_scan_api_reports_progress_metadata(tmp_path, monkeypatch):
     assert payload["scanned"] == 2
     assert payload["workers"] == 2
     assert len(payload["results"]) == 2
+
+def test_scan_uses_default_universe_when_tickers_are_omitted(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATA_MODE", "demo")
+    monkeypatch.setenv("SCAN_HISTORY_DIR", str(tmp_path))
+    monkeypatch.setenv("SCAN_WORKERS", "2")
+    monkeypatch.setattr("app.main.default_scan_tickers", lambda: ["AAA", "BBB"])
+
+    client = TestClient(app)
+    response = client.post("/api/scan", json={})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["requested"] == 2
+    assert payload["scanned"] == 2
+    assert payload["universe"] == "default_500m_2b"
 
 def test_scan_history_saves_and_merges_by_day(tmp_path, monkeypatch):
     monkeypatch.setenv("SCAN_HISTORY_DIR", str(tmp_path))
@@ -195,13 +216,60 @@ def test_fetch_industry_falls_back_to_profile(monkeypatch):
 
     assert fetch_industry("APP") == "Software - Application"
 
-def test_starting_universe_has_250_smaller_companies():
+def test_default_universe_has_750_mid_cap_companies(monkeypatch):
+    fetch_default_scan_tickers.cache_clear()
+    rows = [
+        {
+            "symbol": f"C{i:03d}",
+            "name": f"Company {i:03d} Common Stock",
+            "marketCap": str(DEFAULT_MARKET_CAP_MAX - i * 1_000_000),
+        }
+        for i in range(DEFAULT_SCAN_LIMIT + 5)
+    ]
+    rows.extend(
+        [
+            {
+                "symbol": "AAPL",
+                "name": "Apple Inc. Common Stock",
+                "marketCap": str(DEFAULT_MARKET_CAP_MAX + 1),
+            },
+            {
+                "symbol": "WRTW",
+                "name": "Example Warrant",
+                "marketCap": str(DEFAULT_MARKET_CAP_MAX - 10),
+            },
+            {
+                "symbol": "LOWC",
+                "name": "Low Cap Common Stock",
+                "marketCap": str(DEFAULT_MARKET_CAP_MIN - 1),
+            },
+        ]
+    )
+
+    def fake_get(url, **kwargs):
+        assert url == NASDAQ_SCREENER_URL
+        return httpx.Response(
+            200,
+            request=httpx.Request("GET", url),
+            json={"data": {"rows": rows}},
+        )
+
+    monkeypatch.setattr("app.main.httpx.get", fake_get)
+
+    tickers = default_scan_tickers()
+
+    assert len(tickers) == DEFAULT_SCAN_LIMIT
+    assert len(tickers) == len(set(tickers))
+    assert tickers[0] == "C000"
+    assert tickers[-1] == f"C{DEFAULT_SCAN_LIMIT - 1:03d}"
+    assert "AAPL" not in tickers
+    assert "WRTW" not in tickers
+    assert "LOWC" not in tickers
+
+def test_main_page_loads_default_universe_from_api():
     html = open("app/static/index.html", encoding="utf-8").read()
-    default_tickers = html.split('<textarea id="tickers">', 1)[1].split("</textarea>", 1)[0].split(",")
-    assert len(default_tickers) == 250
-    assert len(default_tickers) == len(set(default_tickers))
-    assert "AAPL" not in default_tickers
-    assert "MSFT" not in default_tickers
+    assert "/api/default-universe" in html
+    assert '<textarea id="tickers"' in html
 
 def test_main_page_links_saved_scan_dates():
     html = open("app/static/index.html", encoding="utf-8").read()
